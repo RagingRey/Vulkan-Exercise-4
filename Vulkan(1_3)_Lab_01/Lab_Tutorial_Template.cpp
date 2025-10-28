@@ -1149,27 +1149,20 @@ void HelloTriangleApplication::updateUniformBuffer(uint32_t currentImage) {
     auto currentTime = std::chrono::high_resolution_clock::now();
     float time = std::chrono::duration<float>(currentTime - startTime).count();
 
-    // === MODIFIED Struct ===
     SceneUniformBufferObject ubo{};
-
-    // === MODIFIED: No model matrix ===
     ubo.view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
     ubo.eyePos = cameraPos;
     ubo.proj = glm::perspective(glm::radians(45.0f), swapChainExtent.width / (float)swapChainExtent.height, 0.1f, 10.0f);
     ubo.proj[1][1] *= -1;
 
-    // === NEW: Set Light Positions ===
-    // Light 1: Static White (using original example pos)
     ubo.lightPos1 = glm::vec3(2.0f, 2.0f, 2.0f);
 
-    // Light 2: Rotating Red (rotating around Z-axis)
-    float rotAngle = time * glm::radians(70.0f); // 70 degrees per second
-    glm::vec4 rotatingPos = glm::rotate(glm::mat4(1.0f), rotAngle, glm::vec3(0.0f, 0.0f, 1.0f))
-        * glm::vec4(2.0f, 0.0f, 1.0f, 1.0f); // 2 units out, 1 unit up
+    // Rotate around Y-axis (was Z)
+    float rotAngle = time * glm::radians(70.0f);
+    glm::vec4 rotatingPos = glm::rotate(glm::mat4(1.0f), rotAngle, glm::vec3(0.0f, 1.0f, 0.0f))
+        * glm::vec4(2.0f, 0.0f, 1.0f, 1.0f);
     ubo.lightPos2 = glm::vec3(rotatingPos);
 
-
-    // === RENAMED Member ===
     memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
 }
 

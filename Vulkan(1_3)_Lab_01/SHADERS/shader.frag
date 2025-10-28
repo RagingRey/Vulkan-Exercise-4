@@ -1,73 +1,53 @@
 #version 450
 
-// INs
-layout(location = 0) in vec3 fragColor;       // Diffuse Material from vertex color
-layout(location = 1) in vec3 fragWorldPos;
-layout(location = 2) in vec3 fragWorldNormal;
-layout(location = 3) in vec3 fragAmbientMat;
-layout(location = 4) in vec3 fragSpecularMat;
-layout(location = 5) in float fragShininess;
+layout(location = 0) in vec3 vWorldPos;
+layout(location = 1) in vec3 vNormal;
 
-// UBO (Scene Data)
-layout(binding = 0) uniform SceneUBO {
-    mat4 view;      // Not used in frag, but must match vert
-    mat4 proj;      // Not used in frag, but must match vert
-    vec3 lightPos1; // Static White
-    vec3 lightPos2; // Rotating Red
-    vec3 eyePos;
-} ubo;
-
-// OUT
 layout(location = 0) out vec4 outColor;
 
-// Function to calculate lighting for one light source (Diffuse + Specular)
-vec3 calcLight(vec3 lightPos, vec3 lightColor, vec3 norm, vec3 viewDir, 
-               vec3 diffuseMat, vec3 specularMat, float shininess) 
-{
-    // --- Compute vectors ---
-    vec3 lightDir = normalize(lightPos - fragWorldPos);
-    
-    // --- Diffuse ---
-    float diff = max(dot(norm, lightDir), 0.0);
-    vec3 diffuse = diffuseMat * lightColor * diff;
+layout(set = 0, binding = 0) uniform SceneUBO {
+    mat4 view;
+    mat4 proj;
+    vec3 lightPos1; float _pad0;
+    vec3 lightPos2; float _pad1;
+    vec3 eyePos;    float _pad2;
+} UBO;
 
-    // --- Specular ---
-    vec3 reflectDir = reflect(-lightDir, norm);
-    float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
-    vec3 specular = specularMat * lightColor * spec;
-
-    return (diffuse + specular);
-}
+layout(push_constant) uniform ObjectPush {
+    mat4 model;
+    vec4 ambientMat;
+    vec4 specularMat;
+    float shininess;
+    float _pcPad0; float _pcPad1; float _pcPad2;
+} PC;
 
 void main() {
-    // --- Material properties from vertex shader ---
-    vec3 diffuseMaterial = fragColor;       // from inColor
-    vec3 ambientMaterial = fragAmbientMat;
-    vec3 specularMaterial = fragSpecularMat;
-    float shininess = fragShininess;
+    vec3 N = normalize(vNormal);
+    vec3 V = normalize(UBO.eyePos - vWorldPos);
 
-    // --- Light properties ---
-    vec3 lightColor1 = vec3(1.0, 1.0, 1.0); // Static White
-    vec3 lightColor2 = vec3(1.0, 0.0, 0.0); // Rotating Red
+    // Base albedo: white (ignores per-vertex color)
+    vec3 baseDiffuse = vec3(1.0);
 
-    // --- Compute common vectors ---
-    vec3 norm = normalize(fragWorldNormal);
-    vec3 viewDir = normalize(ubo.eyePos - fragWorldPos);
+    // Light colors
+    vec3 light1Color = vec3(1.0, 1.0, 1.0); // white
+    vec3 light2Color = vec3(1.0, 0.1, 0.1); // red
 
-    // --- Ambient component (global, not per-light) ---
-    // Apply a dim white global ambient light
-    vec3 globalAmbientLight = vec3(0.1, 0.1, 0.1); 
-    vec3 ambient = ambientMaterial * globalAmbientLight;
-    
-    // --- Calculate for Light 1 (Static White) ---
-    vec3 light1 = calcLight(ubo.lightPos1, lightColor1, norm, viewDir,
-                            diffuseMaterial, specularMaterial, shininess);
+    // Light 1
+    vec3 L1 = normalize(UBO.lightPos1 - vWorldPos);
+    float diff1 = max(dot(N, L1), 0.0);
+    vec3 H1 = normalize(L1 + V);
+    float spec1 = pow(max(dot(N, H1), 0.0), PC.shininess);
 
-    // --- Calculate for Light 2 (Rotating Red) ---
-    vec3 light2 = calcLight(ubo.lightPos2, lightColor2, norm, viewDir,
-                            diffuseMaterial, specularMaterial, shininess);
+    // Light 2
+    vec3 L2 = normalize(UBO.lightPos2 - vWorldPos);
+    float diff2 = max(dot(N, L2), 0.0);
+    vec3 H2 = normalize(L2 + V);
+    float spec2 = pow(max(dot(N, H2), 0.0), PC.shininess);
 
-    // --- Combine components ---
-    vec3 result = ambient + light1 + light2;
-    outColor = vec4(result, 1.0);
+    vec3 ambient = PC.ambientMat.rgb;
+    vec3 diffuse = baseDiffuse * (diff1 * light1Color + diff2 * light2Color);
+    vec3 specular = PC.specularMat.rgb * (spec1 * light1Color + spec2 * light2Color);
+
+    vec3 color = ambient + diffuse + specular;
+    outColor = vec4(color, 1.0);
 }
