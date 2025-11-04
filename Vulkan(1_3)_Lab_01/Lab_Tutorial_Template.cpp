@@ -23,6 +23,9 @@
 #include <optional>
 #include <set>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
 // --- Configuration ---
 const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 600;
@@ -64,7 +67,8 @@ struct SwapChainSupportDetails {
 struct Vertex {
     glm::vec3 pos;
     glm::vec3 color;
-    glm::vec3 normal; // New
+    glm::vec3 normal;
+    glm::vec2 texCoord;
 
     static VkVertexInputBindingDescription getBindingDescription() {
         VkVertexInputBindingDescription bindingDescription{};
@@ -74,11 +78,12 @@ struct Vertex {
         return bindingDescription;
     }
 
-    static std::array<VkVertexInputAttributeDescription, 3> getAttributeDescriptions() {
-        std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
+    static std::array<VkVertexInputAttributeDescription, 4> getAttributeDescriptions() {
+        std::array<VkVertexInputAttributeDescription, 4> attributeDescriptions{};
         attributeDescriptions[0] = { 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, pos) };
         attributeDescriptions[1] = { 1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, color) };
         attributeDescriptions[2] = { 2, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal) };
+        attributeDescriptions[3] = { 3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, texCoord) };
         return attributeDescriptions;
     }
 };
@@ -124,52 +129,52 @@ std::vector<uint16_t> indices;
 
 const std::vector<Vertex> Cube_vertices = {
     // Front face
-    {{-0.5f, -0.5f,  0.5f}, {1, 0, 0}, {0, 0, 1}},
-    {{ 0.5f, -0.5f,  0.5f}, {0, 1, 0}, {0, 0, 1}},
-    {{ 0.5f,  0.5f,  0.5f}, {0, 0, 1}, {0, 0, 1}},
-    {{ 0.5f,  0.5f,  0.5f}, {0, 0, 1}, {0, 0, 1}},
-    {{-0.5f,  0.5f,  0.5f}, {1, 1, 1}, {0, 0, 1}},
-    {{-0.5f, -0.5f,  0.5f}, {1, 0, 0}, {0, 0, 1}},
+    {{-0.5f, -0.5f,  0.5f}, {1, 0, 0}, {0, 0, 1}, {0.f, 1.f}},
+    {{ 0.5f, -0.5f,  0.5f}, {0, 1, 0}, {0, 0, 1}, {1.f, 1.f}},
+    {{ 0.5f,  0.5f,  0.5f}, {0, 0, 1}, {0, 0, 1}, {0.f, 1.f}},
+    {{ 0.5f,  0.5f,  0.5f}, {0, 0, 1}, {0, 0, 1}, {1.f, 1.f}},
+    {{-0.5f,  0.5f,  0.5f}, {1, 1, 1}, {0, 0, 1}, {0.f, 1.f}},
+    {{-0.5f, -0.5f,  0.5f}, {1, 0, 0}, {0, 0, 1}, {1.f, 1.f}},
 
     // Back face
-    {{-0.5f, -0.5f, -0.5f}, {1, 0, 0}, {0, 0, -1}},
-    {{-0.5f,  0.5f, -0.5f}, {1, 1, 1}, {0, 0, -1}},
-    {{ 0.5f,  0.5f, -0.5f}, {0, 0, 1}, {0, 0, -1}},
-    {{ 0.5f,  0.5f, -0.5f}, {0, 0, 1}, {0, 0, -1}},
-    {{ 0.5f, -0.5f, -0.5f}, {0, 1, 0}, {0, 0, -1}},
-    {{-0.5f, -0.5f, -0.5f}, {1, 0, 0}, {0, 0, -1}},
+    {{-0.5f, -0.5f, -0.5f}, {1, 0, 0}, {0, 0, -1}, {0.f, 1.f}},
+    {{-0.5f,  0.5f, -0.5f}, {1, 1, 1}, {0, 0, -1}, {1.f, 1.f}},
+    {{ 0.5f,  0.5f, -0.5f}, {0, 0, 1}, {0, 0, -1}, {0.f, 1.f}},
+    {{ 0.5f,  0.5f, -0.5f}, {0, 0, 1}, {0, 0, -1}, {1.f, 1.f}},
+    {{ 0.5f, -0.5f, -0.5f}, {0, 1, 0}, {0, 0, -1}, {0.f, 1.f}},
+    {{-0.5f, -0.5f, -0.5f}, {1, 0, 0}, {0, 0, -1}, {1.f, 1.f}},
 
     // Left face
-    {{-0.5f,  0.5f,  0.5f}, {1, 1, 1}, {-1, 0, 0}},
-    {{-0.5f,  0.5f, -0.5f}, {0, 0, 1}, {-1, 0, 0}},
-    {{-0.5f, -0.5f, -0.5f}, {0, 1, 0}, {-1, 0, 0}},
-    {{-0.5f, -0.5f, -0.5f}, {0, 1, 0}, {-1, 0, 0}},
-    {{-0.5f, -0.5f,  0.5f}, {1, 0, 0}, {-1, 0, 0}},
-    {{-0.5f,  0.5f,  0.5f}, {1, 1, 1}, {-1, 0, 0}},
+    {{-0.5f,  0.5f,  0.5f}, {1, 1, 1}, {-1, 0, 0}, {0.f, 1.f}},
+    {{-0.5f,  0.5f, -0.5f}, {0, 0, 1}, {-1, 0, 0}, {1.f, 1.f}},
+    {{-0.5f, -0.5f, -0.5f}, {0, 1, 0}, {-1, 0, 0}, {0.f, 1.f}},
+    {{-0.5f, -0.5f, -0.5f}, {0, 1, 0}, {-1, 0, 0}, {1.f, 1.f}},
+    {{-0.5f, -0.5f,  0.5f}, {1, 0, 0}, {-1, 0, 0}, {0.f, 1.f}},
+    {{-0.5f,  0.5f,  0.5f}, {1, 1, 1}, {-1, 0, 0}, {1.f, 1.f}},
 
     // Right face
-    {{ 0.5f,  0.5f,  0.5f}, {1, 1, 1}, {1, 0, 0}},
-    {{ 0.5f, -0.5f,  0.5f}, {1, 0, 0}, {1, 0, 0}},
-    {{ 0.5f, -0.5f, -0.5f}, {0, 1, 0}, {1, 0, 0}},
-    {{ 0.5f, -0.5f, -0.5f}, {0, 1, 0}, {1, 0, 0}},
-    {{ 0.5f,  0.5f, -0.5f}, {0, 0, 1}, {1, 0, 0}},
-    {{ 0.5f,  0.5f,  0.5f}, {1, 1, 1}, {1, 0, 0}},
+    {{ 0.5f,  0.5f,  0.5f}, {1, 1, 1}, {1, 0, 0}, {0.f, 1.f}},
+    {{ 0.5f, -0.5f,  0.5f}, {1, 0, 0}, {1, 0, 0}, {1.f, 1.f}},
+    {{ 0.5f, -0.5f, -0.5f}, {0, 1, 0}, {1, 0, 0}, {0.f, 1.f}},
+    {{ 0.5f, -0.5f, -0.5f}, {0, 1, 0}, {1, 0, 0}, {1.f, 1.f}},
+    {{ 0.5f,  0.5f, -0.5f}, {0, 0, 1}, {1, 0, 0}, {0.f, 1.f}},
+    {{ 0.5f,  0.5f,  0.5f}, {1, 1, 1}, {1, 0, 0}, {1.f, 1.f}},
 
     // Top face
-    {{-0.5f,  0.5f, -0.5f}, {1, 0, 0}, {0, 1, 0}},
-    {{-0.5f,  0.5f,  0.5f}, {0, 1, 0}, {0, 1, 0}},
-    {{ 0.5f,  0.5f,  0.5f}, {0, 0, 1}, {0, 1, 0}},
-    {{ 0.5f,  0.5f,  0.5f}, {0, 0, 1}, {0, 1, 0}},
-    {{ 0.5f,  0.5f, -0.5f}, {1, 1, 1}, {0, 1, 0}},
-    {{-0.5f,  0.5f, -0.5f}, {1, 0, 0}, {0, 1, 0}},
+    {{-0.5f,  0.5f, -0.5f}, {1, 0, 0}, {0, 1, 0}, {0.f, 1.f}},
+    {{-0.5f,  0.5f,  0.5f}, {0, 1, 0}, {0, 1, 0}, {1.f, 1.f}},
+    {{ 0.5f,  0.5f,  0.5f}, {0, 0, 1}, {0, 1, 0}, {0.f, 1.f}},
+    {{ 0.5f,  0.5f,  0.5f}, {0, 0, 1}, {0, 1, 0}, {1.f, 1.f}},
+    {{ 0.5f,  0.5f, -0.5f}, {1, 1, 1}, {0, 1, 0}, {0.f, 1.f}},
+    {{-0.5f,  0.5f, -0.5f}, {1, 0, 0}, {0, 1, 0}, {1.f, 1.f}},
 
     // Bottom face
-    {{-0.5f, -0.5f, -0.5f}, {1, 0, 0}, {0, -1, 0}},
-    {{ 0.5f, -0.5f, -0.5f}, {0, 1, 0}, {0, -1, 0}},
-    {{ 0.5f, -0.5f,  0.5f}, {0, 0, 1}, {0, -1, 0}},
-    {{ 0.5f, -0.5f,  0.5f}, {0, 0, 1}, {0, -1, 0}},
-    {{-0.5f, -0.5f,  0.5f}, {1, 1, 1}, {0, -1, 0}},
-    {{-0.5f, -0.5f, -0.5f}, {1, 0, 0}, {0, -1, 0}}
+    {{-0.5f, -0.5f, -0.5f}, {1, 0, 0}, {0, -1, 0}, {0.f, 1.f}},
+    {{ 0.5f, -0.5f, -0.5f}, {0, 1, 0}, {0, -1, 0}, {1.f, 1.f}},
+    {{ 0.5f, -0.5f,  0.5f}, {0, 0, 1}, {0, -1, 0}, {0.f, 1.f}},
+    {{ 0.5f, -0.5f,  0.5f}, {0, 0, 1}, {0, -1, 0}, {1.f, 1.f}},
+    {{-0.5f, -0.5f,  0.5f}, {1, 1, 1}, {0, -1, 0}, {0.f, 1.f}},
+    {{-0.5f, -0.5f, -0.5f}, {1, 0, 0}, {0, -1, 0}, {1.f, 1.f}}
 };
 
 const std::vector<uint16_t> Cube_indices = {
@@ -186,6 +191,11 @@ const std::vector<uint16_t> Cube_indices = {
    // Bottom
    30, 31, 32,  33, 34, 35
 };
+
+VkImage textureImage;
+VkDeviceMemory textureImageMemory;
+VkImageView textureImageView;
+VkSampler textureSampler;
 
 void loadModel() {
     vertices = Cube_vertices;
@@ -328,7 +338,9 @@ private:
     void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
 
-
+	//Lab 5 - Texture Mapping
+    void createTextureFromFile(const std::string& filename);
+    void createTextureSampler(VkSampler& outSampler);
     // --- Callbacks ---
     static void framebufferResizeCallback(GLFWwindow* window, int width, int height);
     static void mouse_callback(GLFWwindow* window, double xpos, double ypos);
@@ -1405,6 +1417,81 @@ uint32_t HelloTriangleApplication::findMemoryType(uint32_t typeFilter, VkMemoryP
         }
     }
     throw std::runtime_error("failed to find suitable memory type!");
+}
+
+void HelloTriangleApplication::createTextureFromFile(const std::string& filename)
+{
+    int texWidth, texHeight, texChannels;
+    stbi_uc* pixels = stbi_load(filename.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+    if (!pixels) {
+        throw std::runtime_error(std::string("failed to load texture image: ") + filename);
+    }
+    VkDeviceSize imageSize = static_cast<VkDeviceSize>(texWidth) * static_cast<VkDeviceSize>(texHeight) * 4;
+
+    // staging buffer
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingBufferMemory;
+    createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        stagingBuffer, stagingBufferMemory);
+
+    void* data;
+    vkMapMemory(device, stagingBufferMemory, 0, imageSize, 0, &data);
+    memcpy(data, pixels, static_cast<size_t>(imageSize));
+    vkUnmapMemory(device, stagingBufferMemory);
+    stbi_image_free(pixels);
+
+    // create image
+    VkImage textureImageLocal;
+    VkDeviceMemory textureImageMemoryLocal;
+
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent.width = static_cast<uint32_t>(texWidth);
+    imageInfo.extent.height = static_cast<uint32_t>(texHeight);
+    imageInfo.extent.depth = 1;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = VK_FORMAT_R8G8B8A8_SRGB;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateImage(device, &imageInfo, nullptr, &textureImageLocal) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create image!");
+    }
+
+    VkMemoryRequirements memRequirements;
+    vkGetImageMemoryRequirements(device, textureImageLocal, &memRequirements);
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (vkAllocateMemory(device, &allocInfo, nullptr, &textureImageMemoryLocal) != VK_SUCCESS) {
+        throw std::runtime_error("failed to allocate image memory!");
+    }
+    vkBindImageMemory(device, textureImageLocal, textureImageMemoryLocal, 0);
+
+    // copy staging -> image
+    transitionImageLayout(textureImageLocal, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+    copyBufferToImage(stagingBuffer, textureImageLocal, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
+    transitionImageLayout(textureImageLocal, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+
+    vkDestroyBuffer(device, stagingBuffer, nullptr);
+    vkFreeMemory(device, stagingBufferMemory, nullptr);
+
+    // create view and sampler and push them into vectors
+    VkImageView view = createImageView(textureImageLocal, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT);
+    VkSampler sampler;
+    createTextureSampler(sampler);
+
+    textureImages.push_back(textureImageLocal);
+    textureImageMemories.push_back(textureImageMemoryLocal);
+    textureImageViews.push_back(view);
+    textureSamplers.push_back(sampler);
 }
 
 
