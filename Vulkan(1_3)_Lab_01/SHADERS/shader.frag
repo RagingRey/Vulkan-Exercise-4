@@ -2,6 +2,7 @@
 
 layout(location = 0) in vec3 vWorldPos;
 layout(location = 1) in vec3 vNormal;
+layout(location = 3) in vec2 fragTexCoord;
 
 layout(location = 0) out vec4 outColor;
 
@@ -20,6 +21,8 @@ layout(push_constant) uniform ObjectPush {
     float shininess;
     float _pcPad0; float _pcPad1; float _pcPad2;
 } PC;
+
+layout(binding = 1) uniform sampler2D texSampler;
 
 void main() {
     vec3 N = normalize(vNormal);
@@ -44,10 +47,12 @@ void main() {
     vec3 H2 = normalize(L2 + V);
     float spec2 = pow(max(dot(N, H2), 0.0), PC.shininess);
 
+    vec4 texColor = texture(texSampler, fragTexCoord);
+
     vec3 ambient = PC.ambientMat.rgb;
     vec3 diffuse = baseDiffuse * (diff1 * light1Color + diff2 * light2Color);
     vec3 specular = PC.specularMat.rgb * (spec1 * light1Color + spec2 * light2Color);
 
-    vec3 color = ambient + diffuse + specular;
+    vec3 color = (ambient + diffuse) * texColor.rgb + specular;
     outColor = vec4(color, 1.0);
 }
