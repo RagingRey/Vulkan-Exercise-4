@@ -6,6 +6,7 @@
 #include <GLFW/glfw3.h>
 
 #define GLM_FORCE_RADIANS
+#define GLM_ENABLE_EXPERIMENTAL
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -22,6 +23,7 @@
 #include <array>
 #include <optional>
 #include <set>
+#include <glm/gtx/quaternion.hpp>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -94,6 +96,9 @@ struct SceneUniformBufferObject {
     alignas(16) glm::vec3 lightPos1; // Static White
     alignas(16) glm::vec3 lightPos2; // Rotating Red
     alignas(16) glm::vec3 eyePos;
+    // added for texture sampling control
+    alignas(8) glm::vec2 texSize;
+    alignas(4) int filterMode;
 };
 
 // NEW Push Constant Struct (Per-Object data)
@@ -111,6 +116,14 @@ struct UniformBufferObject {
     alignas(16) glm::mat4 proj;
     alignas(16) glm::vec3 lightPos; // New
     alignas(16) glm::vec3 eyePos;   // New
+};
+
+// Texture filter modes
+enum TextureFilterMode {
+    FILTER_NEAREST = 0,
+    FILTER_LINEAR = 1,
+    FILTER_ANISOTROPIC = 2,
+    FILTER_BICUBIC = 3
 };
 
 const std::vector<Vertex> Quad_vertices = {
@@ -241,6 +254,12 @@ public:
     float deltaTime = 0.0f;
     std::chrono::high_resolution_clock::time_point lastFrame = std::chrono::high_resolution_clock::now();
 
+    // texture/filter state
+    int textureFilterMode = FILTER_LINEAR;
+    int loadedTexWidth = 0;
+    int loadedTexHeight = 0;
+    int prevTextureFilterMode = -1;
+
 private:
     // --- Core Application Members ---
     GLFWwindow* window = {};
@@ -341,7 +360,9 @@ private:
 
 	//Lab 5 - Texture Mapping
     void createTextureFromFile(const std::string& filename);
-    void createTextureSampler(VkSampler& outSampler);
+    void createTextureSampler(VkSampler& outSampler, int mode);
+    void updateDescriptorSetsSampler();
+
 
     VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags);
     void transitionImageLayout(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout, VkImageAspectFlags aspectMask);
@@ -375,6 +396,12 @@ void HelloTriangleApplication::processInput(GLFWwindow* window) {
     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) cameraPos += cameraSpeed * right;
     if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) cameraPos += cameraSpeed * cameraUp;   // up
     if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) cameraPos -= cameraSpeed * cameraUp;   // down
+
+    // Filter mode switching (1=Nearest, 2=Linear, 3=Aniso, 4=Bicubic)
+    if (glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS) textureFilterMode = FILTER_NEAREST;
+    if (glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS) textureFilterMode = FILTER_LINEAR;
+    if (glfwGetKey(window, GLFW_KEY_3) == GLFW_PRESS) textureFilterMode = FILTER_ANISOTROPIC;
+    if (glfwGetKey(window, GLFW_KEY_4) == GLFW_PRESS) textureFilterMode = FILTER_BICUBIC;
 }
 
 void HelloTriangleApplication::run() {
@@ -1217,20 +1244,52 @@ void HelloTriangleApplication::recordCommandBuffer(VkCommandBuffer commandBuffer
         ObjectPushConstants pc = materials[i];
 
         glm::mat4 model = glm::mat4(1.0f);
+
+        // position cubes across X
         model = glm::translate(model, glm::vec3(-2.5f + (i * 2.5f), 0.0f, 0.0f));
-        model = glm::rotate(model, glm::radians(45.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+
+        // rotate local +Z to align with camera front
+        glm::vec3 localZ = glm::vec3(0.0f, 0.0f, 1.0f);
+        glm::vec3 target = glm::normalize(cameraFront);
+        if (glm::length(target) > 1e-6f) {
+            glm::quat q = glm::rotation(localZ, target);
+            model *= glm::mat4_cast(q);
+        }
+
+        // scale along local Z to create "road" impression
+        model = glm::scale(model, glm::vec3(1.0f, 1.0f, 20.0f));
+
         pc.model = model;
 
         vkCmdPushConstants(
             commandBuffer,
             pipelineLayout,
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, // make visible to both stages
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             0,
             sizeof(ObjectPushConstants),
             &pc);
 
         vkCmdDrawIndexed(commandBuffer, static_cast<uint16_t>(indices.size()), 1, 0, 0, 0);
     }
+
+    //for (int i = 0; i < 3; ++i) {
+    //    ObjectPushConstants pc = materials[i];
+
+    //    glm::mat4 model = glm::mat4(1.0f);
+    //    model = glm::translate(model, glm::vec3(-2.5f + (i * 2.5f), 0.0f, 0.0f));
+    //    model = glm::rotate(model, glm::radians(45.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    //    pc.model = model;
+
+    //    vkCmdPushConstants(
+    //        commandBuffer,
+    //        pipelineLayout,
+    //        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, // make visible to both stages
+    //        0,
+    //        sizeof(ObjectPushConstants),
+    //        &pc);
+
+    //    vkCmdDrawIndexed(commandBuffer, static_cast<uint16_t>(indices.size()), 1, 0, 0, 0);
+    //}
 
     vkCmdEndRendering(commandBuffer);
 
@@ -1273,6 +1332,17 @@ void HelloTriangleApplication::updateUniformBuffer(uint32_t currentImage) {
     glm::vec4 rotatingPos = glm::rotate(glm::mat4(1.0f), rotAngle, glm::vec3(0.0f, 1.0f, 0.0f))
         * glm::vec4(2.0f, 0.0f, 1.0f, 1.0f);
     ubo.lightPos2 = glm::vec3(rotatingPos);
+
+    ubo.texSize = glm::vec2(static_cast<float>(loadedTexWidth), static_cast<float>(loadedTexHeight));
+    ubo.filterMode = textureFilterMode;
+
+    // If the filter mode changed since last frame, recreate sampler and update descriptors.
+    if (textureFilterMode != prevTextureFilterMode) {
+        // recreate the sampler using the new mode (createTextureSampler will update descriptor sets)
+        createTextureSampler(textureSampler, textureFilterMode);
+        prevTextureFilterMode = textureFilterMode;
+        std::cout << "Texture filter mode changed to " << textureFilterMode << std::endl;
+    }
 
     memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
 }
@@ -1587,12 +1657,16 @@ void HelloTriangleApplication::createTextureFromFile(const std::string& filename
     //VkSampler sampler;
     //createTextureSampler(sampler);
 
+    // save texture size for shader sampling logic
+    loadedTexWidth = texWidth;
+    loadedTexHeight = texHeight;
+
     textureImage = textureImageLocal;
     textureImageMemory = textureImageMemoryLocal;
     textureImageView = createImageView(textureImageLocal, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT);
 
     VkSampler localSampler;
-    createTextureSampler(localSampler);
+    createTextureSampler(localSampler, textureFilterMode);
     textureSampler = localSampler;
 
     /*textureImages.push_back(textureImageLocal);
@@ -1601,7 +1675,7 @@ void HelloTriangleApplication::createTextureFromFile(const std::string& filename
     textureSamplers.push_back(sampler);*/
 }
 
-void HelloTriangleApplication::createTextureSampler(VkSampler& outSampler)
+void HelloTriangleApplication::createTextureSampler(VkSampler& outSampler, int mode)
 {
     VkPhysicalDeviceProperties properties{};
     vkGetPhysicalDeviceProperties(physicalDevice, &properties);
@@ -1624,8 +1698,77 @@ void HelloTriangleApplication::createTextureSampler(VkSampler& outSampler)
     samplerInfo.minLod = 0.0f;
     samplerInfo.maxLod = 0.0f;
 
+    switch (mode) {
+    case FILTER_NEAREST:
+        samplerInfo.magFilter = VK_FILTER_NEAREST;
+        samplerInfo.minFilter = VK_FILTER_NEAREST;
+        samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        samplerInfo.anisotropyEnable = VK_FALSE;
+        samplerInfo.maxAnisotropy = 1.0f;
+        break;
+    case FILTER_LINEAR:
+        samplerInfo.magFilter = VK_FILTER_LINEAR;
+        samplerInfo.minFilter = VK_FILTER_LINEAR;
+        samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        samplerInfo.anisotropyEnable = VK_FALSE;
+        samplerInfo.maxAnisotropy = 1.0f;
+        break;
+    case FILTER_ANISOTROPIC:
+        samplerInfo.magFilter = VK_FILTER_LINEAR;
+        samplerInfo.minFilter = VK_FILTER_LINEAR;
+        samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        samplerInfo.anisotropyEnable = VK_TRUE;
+        samplerInfo.maxAnisotropy = properties.limits.maxSamplerAnisotropy;
+        break;
+    case FILTER_BICUBIC:
+        // bicubic is done manually in shader using texelFetch; sampler can be nearest
+        samplerInfo.magFilter = VK_FILTER_NEAREST;
+        samplerInfo.minFilter = VK_FILTER_NEAREST;
+        samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        samplerInfo.anisotropyEnable = VK_FALSE;
+        samplerInfo.maxAnisotropy = 1.0f;
+        break;
+    default:
+        samplerInfo.magFilter = VK_FILTER_LINEAR;
+        samplerInfo.minFilter = VK_FILTER_LINEAR;
+        samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        samplerInfo.anisotropyEnable = VK_FALSE;
+        samplerInfo.maxAnisotropy = 1.0f;
+        break;
+    }
+
+    if (outSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(device, outSampler, nullptr);
+    }
+
     if (vkCreateSampler(device, &samplerInfo, nullptr, &outSampler) != VK_SUCCESS) {
         throw std::runtime_error("failed to create texture sampler!");
+    }
+
+    // update descriptor sets to use the new sampler (helper below)
+    updateDescriptorSetsSampler();
+}
+
+void HelloTriangleApplication::updateDescriptorSetsSampler()
+{
+    if (descriptorSets.empty()) return;
+
+    for (size_t i = 0; i < descriptorSets.size(); ++i) {
+        VkDescriptorImageInfo imageInfo{};
+        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfo.imageView = textureImageView;
+        imageInfo.sampler = textureSampler;
+
+        VkWriteDescriptorSet descriptorWrite{};
+        descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrite.dstSet = descriptorSets[i];
+        descriptorWrite.dstBinding = 1;
+        descriptorWrite.dstArrayElement = 0;
+        descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        descriptorWrite.descriptorCount = 1;
+        descriptorWrite.pImageInfo = &imageInfo;
+
+        vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
     }
 }
 
