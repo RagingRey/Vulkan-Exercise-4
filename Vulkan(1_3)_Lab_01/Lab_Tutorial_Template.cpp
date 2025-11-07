@@ -206,10 +206,17 @@ const std::vector<uint16_t> Cube_indices = {
    30, 31, 32,  33, 34, 35
 };
 
+
 VkImage textureImage;
 VkDeviceMemory textureImageMemory;
 VkImageView textureImageView;
 VkSampler textureSampler;
+
+// Add after the existing texture globals
+VkImage tileTextureImage = VK_NULL_HANDLE;
+VkDeviceMemory tileTextureImageMemory = VK_NULL_HANDLE;
+VkImageView tileTextureImageView = VK_NULL_HANDLE;
+VkSampler tileTextureSampler = VK_NULL_HANDLE;
 
 void loadModel() {
     vertices = Cube_vertices;
@@ -360,6 +367,7 @@ private:
 
 	//Lab 5 - Texture Mapping
     void createTextureFromFile(const std::string& filename);
+    void createSecondTextureFromFile(const std::string& filename);
     void createTextureSampler(VkSampler& outSampler, int mode);
     void updateDescriptorSetsSampler();
 
@@ -437,6 +445,7 @@ void HelloTriangleApplication::initVulkan() {
     loadModel();
 
     createTextureFromFile("Coin2.jpg");
+    createSecondTextureFromFile("Tiles2.jpg");
 
     createVertexBuffer();
     createIndexBuffer();
@@ -708,15 +717,25 @@ void HelloTriangleApplication::createDescriptorSetLayout() {
     uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     uboLayoutBinding.pImmutableSamplers = nullptr;
 
-    // Sampler binding at 1
-    VkDescriptorSetLayoutBinding samplerLayoutBinding{};
-    samplerLayoutBinding.binding = 1;
-    samplerLayoutBinding.descriptorCount = 1;
-    samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    samplerLayoutBinding.pImmutableSamplers = nullptr;
+    // Binding 1: coin texture
+    VkDescriptorSetLayoutBinding samplerLayoutBinding1{};
+    samplerLayoutBinding1.binding = 1;
+    samplerLayoutBinding1.descriptorCount = 1;
+    samplerLayoutBinding1.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    samplerLayoutBinding1.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    samplerLayoutBinding1.pImmutableSamplers = nullptr;
 
-    std::array<VkDescriptorSetLayoutBinding, 2> bindings = { uboLayoutBinding, samplerLayoutBinding };
+    // Binding 2: tile texture
+    VkDescriptorSetLayoutBinding samplerLayoutBinding2{};
+    samplerLayoutBinding2.binding = 2;
+    samplerLayoutBinding2.descriptorCount = 1;
+    samplerLayoutBinding2.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    samplerLayoutBinding2.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    samplerLayoutBinding2.pImmutableSamplers = nullptr;
+
+    std::array<VkDescriptorSetLayoutBinding, 3> bindings = {
+        uboLayoutBinding, samplerLayoutBinding1, samplerLayoutBinding2
+    };
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -915,13 +934,17 @@ void HelloTriangleApplication::createDescriptorPool() {
     std::array<VkDescriptorPoolSize, 2> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+
+    // We need 2 samplers per set (coin + tile)
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * 2;
+
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
     poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+
     if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("failed to create descriptor pool!");
     }
@@ -929,6 +952,7 @@ void HelloTriangleApplication::createDescriptorPool() {
 
 void HelloTriangleApplication::createDescriptorSets() {
     std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, descriptorSetLayout);
+
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = descriptorPool;
@@ -940,36 +964,52 @@ void HelloTriangleApplication::createDescriptorSets() {
         throw std::runtime_error("Failed to allocate descriptor sets!");
     }
 
-    VkDescriptorImageInfo imageInfo{};
-    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    imageInfo.imageView = textureImageView;
-    imageInfo.sampler = textureSampler;
-
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         VkDescriptorBufferInfo bufferInfo{};
         bufferInfo.buffer = uniformBuffers[i];
         bufferInfo.offset = 0;
         bufferInfo.range = sizeof(SceneUniformBufferObject);
 
-        std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
+        VkDescriptorImageInfo coinInfo{};
+        coinInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        coinInfo.imageView = textureImageView;
+        coinInfo.sampler = textureSampler;
 
-        descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrites[0].dstSet = descriptorSets[i];
-        descriptorWrites[0].dstBinding = 0;
-        descriptorWrites[0].dstArrayElement = 0;
-        descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        descriptorWrites[0].descriptorCount = 1;
-        descriptorWrites[0].pBufferInfo = &bufferInfo;
+        VkDescriptorImageInfo tileInfo{};
+        tileInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        tileInfo.imageView = tileTextureImageView;
+        tileInfo.sampler = tileTextureSampler;
 
-        descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrites[1].dstSet = descriptorSets[i];
-        descriptorWrites[1].dstBinding = 1;
-        descriptorWrites[1].dstArrayElement = 0;
-        descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        descriptorWrites[1].descriptorCount = 1;
-        descriptorWrites[1].pImageInfo = &imageInfo;
+        std::array<VkWriteDescriptorSet, 3> writes{};
 
-        vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+        // UBO
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = descriptorSets[i];
+        writes[0].dstBinding = 0;
+        writes[0].dstArrayElement = 0;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[0].descriptorCount = 1;
+        writes[0].pBufferInfo = &bufferInfo;
+
+        // Binding 1: coin
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = descriptorSets[i];
+        writes[1].dstBinding = 1;
+        writes[1].dstArrayElement = 0;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[1].descriptorCount = 1;
+        writes[1].pImageInfo = &coinInfo;
+
+        // Binding 2: tile
+        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet = descriptorSets[i];
+        writes[2].dstBinding = 2;
+        writes[2].dstArrayElement = 0;
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[2].descriptorCount = 1;
+        writes[2].pImageInfo = &tileInfo;
+
+        vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 
     //std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, descriptorSetLayout);
@@ -1249,15 +1289,15 @@ void HelloTriangleApplication::recordCommandBuffer(VkCommandBuffer commandBuffer
         model = glm::translate(model, glm::vec3(-2.5f + (i * 2.5f), 0.0f, 0.0f));
 
         // rotate local +Z to align with camera front
-        glm::vec3 localZ = glm::vec3(0.0f, 0.0f, 1.0f);
-        glm::vec3 target = glm::normalize(cameraFront);
-        if (glm::length(target) > 1e-6f) {
-            glm::quat q = glm::rotation(localZ, target);
-            model *= glm::mat4_cast(q);
-        }
+        //glm::vec3 localZ = glm::vec3(0.0f, 0.0f, 1.0f);
+        //glm::vec3 target = glm::normalize(cameraFront);
+        //if (glm::length(target) > 1e-6f) {
+        //    glm::quat q = glm::rotation(localZ, target);
+        //    model *= glm::mat4_cast(q);
+        //}
 
-        // scale along local Z to create "road" impression
-        model = glm::scale(model, glm::vec3(1.0f, 1.0f, 20.0f));
+        //// scale along local Z to create "road" impression
+        //model = glm::scale(model, glm::vec3(1.0f, 1.0f, 20.0f));
 
         pc.model = model;
 
@@ -1340,6 +1380,7 @@ void HelloTriangleApplication::updateUniformBuffer(uint32_t currentImage) {
     if (textureFilterMode != prevTextureFilterMode) {
         // recreate the sampler using the new mode (createTextureSampler will update descriptor sets)
         createTextureSampler(textureSampler, textureFilterMode);
+        createTextureSampler(tileTextureSampler, textureFilterMode);
         prevTextureFilterMode = textureFilterMode;
         std::cout << "Texture filter mode changed to " << textureFilterMode << std::endl;
     }
@@ -1675,6 +1716,72 @@ void HelloTriangleApplication::createTextureFromFile(const std::string& filename
     textureSamplers.push_back(sampler);*/
 }
 
+void HelloTriangleApplication::createSecondTextureFromFile(const std::string & filename)
+{
+    int texWidth, texHeight, texChannels;
+    stbi_uc* pixels = stbi_load(filename.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+    if (!pixels) {
+        throw std::runtime_error(std::string("failed to load texture image: ") + filename);
+    }
+    VkDeviceSize imageSize = static_cast<VkDeviceSize>(texWidth) * static_cast<VkDeviceSize>(texHeight) * 4;
+
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingBufferMemory;
+    createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        stagingBuffer, stagingBufferMemory);
+
+    void* data;
+    vkMapMemory(device, stagingBufferMemory, 0, imageSize, 0, &data);
+    memcpy(data, pixels, static_cast<size_t>(imageSize));
+    vkUnmapMemory(device, stagingBufferMemory);
+    stbi_image_free(pixels);
+
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent.width = static_cast<uint32_t>(texWidth);
+    imageInfo.extent.height = static_cast<uint32_t>(texHeight);
+    imageInfo.extent.depth = 1;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = VK_FORMAT_R8G8B8A8_SRGB;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateImage(device, &imageInfo, nullptr, &tileTextureImage) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create image!");
+    }
+
+    VkMemoryRequirements memRequirements;
+    vkGetImageMemoryRequirements(device, tileTextureImage, &memRequirements);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (vkAllocateMemory(device, &allocInfo, nullptr, &tileTextureImageMemory) != VK_SUCCESS) {
+        throw std::runtime_error("failed to allocate image memory!");
+    }
+    vkBindImageMemory(device, tileTextureImage, tileTextureImageMemory, 0);
+
+    transitionImageLayout(tileTextureImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+    copyBufferToImage(stagingBuffer, tileTextureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
+    transitionImageLayout(tileTextureImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+
+    vkDestroyBuffer(device, stagingBuffer, nullptr);
+    vkFreeMemory(device, stagingBufferMemory, nullptr);
+
+    tileTextureImageView = createImageView(tileTextureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT);
+
+    // Create sampler with current filter mode
+    createTextureSampler(tileTextureSampler, textureFilterMode);
+}
+
 void HelloTriangleApplication::createTextureSampler(VkSampler& outSampler, int mode)
 {
     VkPhysicalDeviceProperties properties{};
@@ -1754,21 +1861,35 @@ void HelloTriangleApplication::updateDescriptorSetsSampler()
     if (descriptorSets.empty()) return;
 
     for (size_t i = 0; i < descriptorSets.size(); ++i) {
-        VkDescriptorImageInfo imageInfo{};
-        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        imageInfo.imageView = textureImageView;
-        imageInfo.sampler = textureSampler;
+        VkDescriptorImageInfo coinInfo{};
+        coinInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        coinInfo.imageView = textureImageView;
+        coinInfo.sampler = textureSampler;
 
-        VkWriteDescriptorSet descriptorWrite{};
-        descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrite.dstSet = descriptorSets[i];
-        descriptorWrite.dstBinding = 1;
-        descriptorWrite.dstArrayElement = 0;
-        descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        descriptorWrite.descriptorCount = 1;
-        descriptorWrite.pImageInfo = &imageInfo;
+        VkDescriptorImageInfo tileInfo{};
+        tileInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        tileInfo.imageView = tileTextureImageView;
+        tileInfo.sampler = tileTextureSampler;
 
-        vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
+        std::array<VkWriteDescriptorSet, 2> writes{};
+
+        // Rebind coin sampler
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = descriptorSets[i];
+        writes[0].dstBinding = 1;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[0].descriptorCount = 1;
+        writes[0].pImageInfo = &coinInfo;
+
+        // Rebind tile sampler
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = descriptorSets[i];
+        writes[1].dstBinding = 2;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[1].descriptorCount = 1;
+        writes[1].pImageInfo = &tileInfo;
+
+        vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 }
 
