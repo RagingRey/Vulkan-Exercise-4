@@ -108,6 +108,8 @@ struct ObjectPushConstants {
     alignas(16) glm::vec4 ambientMat;
     alignas(16) glm::vec4 specularMat;
     float shininess;
+
+	alignas(4) int texIndex;//Added for texture array indexing
 };
 
 struct UniformBufferObject {
@@ -140,9 +142,9 @@ const std::vector<uint16_t> Quad_indices = {
 std::vector<Vertex> vertices;
 std::vector<uint16_t> indices;
 
-auto faceUV = [&](float S, glm::vec2 uv) { return uv * S; };
+auto faceUV = [&](float S, glm::vec2 uv) { return uv; };
 const std::vector<Vertex> Cube_vertices = {
-    // Front face
+    // Front face (CCW)
     {{-0.5f, -0.5f,  0.5f}, {1, 0, 0}, {0, 0, 1}, faceUV(1.f, {0.0f, 0.0f})},
     {{ 0.5f, -0.5f,  0.5f}, {0, 1, 0}, {0, 0, 1}, faceUV(1.f, {1.0f, 0.0f})},
     {{ 0.5f,  0.5f,  0.5f}, {0, 0, 1}, {0, 0, 1}, faceUV(1.f, {1.0f, 1.0f})},
@@ -150,7 +152,7 @@ const std::vector<Vertex> Cube_vertices = {
     {{-0.5f,  0.5f,  0.5f}, {1, 1, 1}, {0, 0, 1}, faceUV(1.f, {0.0f, 1.0f})},
     {{-0.5f, -0.5f,  0.5f}, {1, 0, 0}, {0, 0, 1}, faceUV(1.f, {0.0f, 0.0f})},
 
-    // Back face
+    // Back face (CCW)
     {{-0.5f, -0.5f, -0.5f}, {1, 0, 0}, {0, 0, -1}, faceUV(2.f, {1.0f, 0.0f})},
     {{-0.5f,  0.5f, -0.5f}, {1, 1, 1}, {0, 0, -1}, faceUV(2.f, {1.0f, 1.0f})},
     {{ 0.5f,  0.5f, -0.5f}, {0, 0, 1}, {0, 0, -1}, faceUV(2.f, {0.0f, 1.0f})},
@@ -158,23 +160,24 @@ const std::vector<Vertex> Cube_vertices = {
     {{ 0.5f, -0.5f, -0.5f}, {0, 1, 0}, {0, 0, -1}, faceUV(2.f, {0.0f, 0.0f})},
     {{-0.5f, -0.5f, -0.5f}, {1, 0, 0}, {0, 0, -1}, faceUV(2.f, {1.0f, 0.0f})},
 
-    // Left face
-    {{-0.5f,  0.5f,  0.5f}, {1, 1, 1}, {-1, 0, 0}, faceUV(3.f, {1.0f, 1.0f})},
-    {{-0.5f,  0.5f, -0.5f}, {0, 0, 1}, {-1, 0, 0}, faceUV(3.f, {0.0f, 1.0f})},
-    {{-0.5f, -0.5f, -0.5f}, {0, 1, 0}, {-1, 0, 0}, faceUV(3.f, {0.0f, 0.0f})},
-    {{-0.5f, -0.5f, -0.5f}, {0, 1, 0}, {-1, 0, 0}, faceUV(3.f, {0.0f, 0.0f})},
-    {{-0.5f, -0.5f,  0.5f}, {1, 0, 0}, {-1, 0, 0}, faceUV(3.f, {1.0f, 0.0f})},
-    {{-0.5f,  0.5f,  0.5f}, {1, 1, 1}, {-1, 0, 0}, faceUV(3.f, {1.0f, 1.0f})},
+    // Left face (FIXED to CCW)
+    {{-0.5f,  0.5f,  0.5f}, {1, 1, 1}, {-1, 0, 0}, faceUV(3.f, {1.0f, 1.0f})}, // 12
+    {{-0.5f,  0.5f, -0.5f}, {0, 0, 1}, {-1, 0, 0}, faceUV(3.f, {0.0f, 1.0f})}, // 13
+    {{-0.5f, -0.5f, -0.5f}, {0, 1, 0}, {-1, 0, 0}, faceUV(3.f, {0.0f, 0.0f})}, // 14
+    {{-0.5f, -0.5f, -0.5f}, {0, 1, 0}, {-1, 0, 0}, faceUV(3.f, {0.0f, 0.0f})}, // 15
+    {{-0.5f, -0.5f,  0.5f}, {1, 0, 0}, {-1, 0, 0}, faceUV(3.f, {1.0f, 0.0f})}, // 16
+    {{-0.5f,  0.5f,  0.5f}, {1, 1, 1}, {-1, 0, 0}, faceUV(3.f, {1.0f, 1.0f})}, // 17
 
-    // Right face
-    {{ 0.5f,  0.5f,  0.5f}, {1, 1, 1}, {1, 0, 0}, faceUV(4.f, {0.0f, 1.0f})},
-    {{ 0.5f, -0.5f,  0.5f}, {1, 0, 0}, {1, 0, 0}, faceUV(4.f, {0.0f, 0.0f})},
-    {{ 0.5f, -0.5f, -0.5f}, {0, 1, 0}, {1, 0, 0}, faceUV(4.f, {1.0f, 0.0f})},
-    {{ 0.5f, -0.5f, -0.5f}, {0, 1, 0}, {1, 0, 0}, faceUV(4.f, {1.0f, 0.0f})},
-    {{ 0.5f,  0.5f, -0.5f}, {0, 0, 1}, {1, 0, 0}, faceUV(4.f, {1.0f, 1.0f})},
-    {{ 0.5f,  0.5f,  0.5f}, {1, 1, 1}, {1, 0, 0}, faceUV(4.f, {0.0f, 1.0f})},
+    // Right face (FIXED to CCW)
+    {{ 0.5f,  0.5f,  0.5f}, {1, 1, 1}, {1, 0, 0}, faceUV(4.f, {0.0f, 1.0f})}, // 18
+    {{ 0.5f, -0.5f,  0.5f}, {1, 0, 0}, {1, 0, 0}, faceUV(4.f, {0.0f, 0.0f})}, // 20
+    {{ 0.5f, -0.5f, -0.5f}, {0, 1, 0}, {1, 0, 0}, faceUV(4.f, {1.0f, 0.0f})}, // 19
 
-    // Top face
+    {{ 0.5f, -0.5f, -0.5f}, {0, 1, 0}, {1, 0, 0}, faceUV(4.f, {1.0f, 0.0f})}, // 21
+    {{ 0.5f,  0.5f, -0.5f}, {0, 0, 1}, {1, 0, 0}, faceUV(4.f, {1.0f, 1.0f})}, // 23
+    {{ 0.5f,  0.5f,  0.5f}, {1, 1, 1}, {1, 0, 0}, faceUV(4.f, {0.0f, 1.0f})}, // 22
+
+    // Top face (CCW)
     {{-0.5f,  0.5f, -0.5f}, {1, 0, 0}, {0, 1, 0}, faceUV(5.f, {0.0f, 0.0f})},
     {{-0.5f,  0.5f,  0.5f}, {0, 1, 0}, {0, 1, 0}, faceUV(5.f, {0.0f, 1.0f})},
     {{ 0.5f,  0.5f,  0.5f}, {0, 0, 1}, {0, 1, 0}, faceUV(5.f, {1.0f, 1.0f})},
@@ -182,13 +185,13 @@ const std::vector<Vertex> Cube_vertices = {
     {{ 0.5f,  0.5f, -0.5f}, {1, 1, 1}, {0, 1, 0}, faceUV(5.f, {1.0f, 0.0f})},
     {{-0.5f,  0.5f, -0.5f}, {1, 0, 0}, {0, 1, 0}, faceUV(5.f, {0.0f, 0.0f})},
 
-    // Bottom face
-    {{-0.5f, -0.5f, -0.5f}, {1, 0, 0}, {0, -1, 0}, faceUV(6.f, {0.0f, 0.0f})},
-    {{ 0.5f, -0.5f, -0.5f}, {0, 1, 0}, {0, -1, 0}, faceUV(6.f, {1.0f, 0.0f})},
-    {{ 0.5f, -0.5f,  0.5f}, {0, 0, 1}, {0, -1, 0}, faceUV(6.f, {1.0f, 1.0f})},
-    {{ 0.5f, -0.5f,  0.5f}, {0, 0, 1}, {0, -1, 0}, faceUV(6.f, {1.0f, 1.0f})},
-    {{-0.5f, -0.5f,  0.5f}, {1, 1, 1}, {0, -1, 0}, faceUV(6.f, {0.0f, 1.0f})},
-    {{-0.5f, -0.5f, -0.5f}, {1, 0, 0}, {0, -1, 0}, faceUV(6.f, {0.0f, 0.0f})}
+    // Bottom face (FIXED to CCW)
+    {{-0.5f, -0.5f, -0.5f}, {1, 0, 0}, {0, -1, 0}, faceUV(6.f, {0.0f, 0.0f})}, // 30
+    {{ 0.5f, -0.5f, -0.5f}, {0, 1, 0}, {0, -1, 0}, faceUV(6.f, {1.0f, 0.0f})}, // 32 (swapped)
+    {{ 0.5f, -0.5f,  0.5f}, {0, 0, 1}, {0, -1, 0}, faceUV(6.f, {1.0f, 1.0f})}, // 31 (swapped)
+    {{ 0.5f, -0.5f,  0.5f}, {0, 0, 1}, {0, -1, 0}, faceUV(6.f, {1.0f, 1.0f})}, // 33
+    {{-0.5f, -0.5f,  0.5f}, {1, 1, 1}, {0, -1, 0}, faceUV(6.f, {0.0f, 1.0f})}, // 35 (swapped)
+    {{-0.5f, -0.5f, -0.5f}, {1, 0, 0}, {0, -1, 0}, faceUV(6.f, {0.0f, 0.0f})}  // 34 (swapped)
 };
 
 const std::vector<uint16_t> Cube_indices = {
@@ -304,6 +307,14 @@ private:
     std::vector<VkDeviceMemory> uniformBuffersMemory;
     std::vector<void*> uniformBuffersMapped;
 
+    VkSampler tileTextureSampler = VK_NULL_HANDLE;
+
+    // --- NEW Depth Buffer Members ---
+    VkImage depthImage;
+    VkDeviceMemory depthImageMemory;
+    VkImageView depthImageView;
+    VkFormat depthFormat;
+
     // --- Descriptors ---
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> descriptorSets;
@@ -328,6 +339,7 @@ private:
     void createLogicalDevice();
     void createSwapChain();
     void createImageViews();
+    void createDepthResources();
     void createDescriptorSetLayout();
     void createGraphicsPipeline();
     void createCommandPool();
@@ -387,6 +399,31 @@ private:
         VkDebugUtilsMessageTypeFlagsEXT messageType,
         const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
         void* pUserData);
+
+    // --- ADD THIS NEW FUNCTION ---
+    VkFormat findSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features) {
+        for (VkFormat format : candidates) {
+            VkFormatProperties props;
+            vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &props);
+
+            if (tiling == VK_IMAGE_TILING_LINEAR && (props.linearTilingFeatures & features) == features) {
+                return format;
+            }
+            else if (tiling == VK_IMAGE_TILING_OPTIMAL && (props.optimalTilingFeatures & features) == features) {
+                return format;
+            }
+        }
+        throw std::runtime_error("failed to find supported format!");
+    }
+
+    // --- AND THIS ONE ---
+    VkFormat findDepthFormat() {
+        return findSupportedFormat(
+            { VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT },
+            VK_IMAGE_TILING_OPTIMAL,
+            VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT
+        );
+    }
 };
 
 // --- Implementation ---
@@ -436,16 +473,23 @@ void HelloTriangleApplication::initVulkan() {
     createSurface();
     pickPhysicalDevice();
     createLogicalDevice();
+
+    // Create the command pool BEFORE any function that needs to allocate commands
+    createCommandPool();
+
+    // These functions use the command pool via beginSingleTimeCommands
     createSwapChain();
     createImageViews();
+    createDepthResources();
+
     createDescriptorSetLayout();
     createGraphicsPipeline();
-    createCommandPool();
 
     loadModel();
 
-    createTextureFromFile("Coin2.jpg");
-    createSecondTextureFromFile("Tiles2.jpg");
+    // These functions also use the command pool
+    createTextureFromFile("Wood2.jpg");
+    createSecondTextureFromFile("rock.jpg");
 
     createVertexBuffer();
     createIndexBuffer();
@@ -583,6 +627,9 @@ void HelloTriangleApplication::pickPhysicalDevice() {
     if (physicalDevice == VK_NULL_HANDLE) {
         throw std::runtime_error("Failed to find a suitable GPU!");
     }
+
+    // --- ADD THIS LINE ---
+    depthFormat = findDepthFormat();
 }
 
 void HelloTriangleApplication::createLogicalDevice() {
@@ -709,6 +756,56 @@ void HelloTriangleApplication::createImageViews() {
     }
 }
 
+void HelloTriangleApplication::createDepthResources()
+{
+    VkExtent2D extent = swapChainExtent;
+
+    // Create the Image
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent.width = extent.width;
+    imageInfo.extent.height = extent.height;
+    imageInfo.extent.depth = 1;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = depthFormat;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateImage(device, &imageInfo, nullptr, &depthImage) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create depth image!");
+    }
+
+    // Allocate Memory
+    VkMemoryRequirements memRequirements;
+    vkGetImageMemoryRequirements(device, depthImage, &memRequirements);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (vkAllocateMemory(device, &allocInfo, nullptr, &depthImageMemory) != VK_SUCCESS) {
+        throw std::runtime_error("failed to allocate depth image memory!");
+    }
+
+    // Bind Memory
+    vkBindImageMemory(device, depthImage, depthImageMemory, 0);
+
+    // Create the Image View
+    depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+    // Transition Layout
+    transitionImageLayout(depthImage,
+        VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        VK_IMAGE_ASPECT_DEPTH_BIT);
+}
+
 void HelloTriangleApplication::createDescriptorSetLayout() {
     VkDescriptorSetLayoutBinding uboLayoutBinding{};
     uboLayoutBinding.binding = 0;
@@ -794,7 +891,7 @@ void HelloTriangleApplication::createGraphicsPipeline() {
     rasterizer.rasterizerDiscardEnable = VK_FALSE;
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
     rasterizer.lineWidth = 1.0f;
-    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
     rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizer.depthBiasEnable = VK_FALSE;
 
@@ -802,6 +899,14 @@ void HelloTriangleApplication::createGraphicsPipeline() {
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisampling.sampleShadingEnable = VK_FALSE;
     multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS; // Nearer objects (less depth) pass
+    depthStencil.depthBoundsTestEnable = VK_FALSE;
+    depthStencil.stencilTestEnable = VK_FALSE;
 
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
@@ -841,6 +946,8 @@ void HelloTriangleApplication::createGraphicsPipeline() {
     renderingCreateInfo.colorAttachmentCount = 1;
     renderingCreateInfo.pColorAttachmentFormats = &swapChainImageFormat;
 
+    renderingCreateInfo.depthAttachmentFormat = depthFormat;
+
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     pipelineInfo.pNext = &renderingCreateInfo;
@@ -851,6 +958,7 @@ void HelloTriangleApplication::createGraphicsPipeline() {
     pipelineInfo.pViewportState = &viewportState;
     pipelineInfo.pRasterizationState = &rasterizer;
     pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = pipelineLayout;
@@ -1175,9 +1283,14 @@ void HelloTriangleApplication::recreateSwapChain() {
     cleanupSwapChain();
     createSwapChain();
     createImageViews();
+    createDepthResources();
 }
 
 void HelloTriangleApplication::cleanupSwapChain() {
+    vkDestroyImageView(device, depthImageView, nullptr);
+    vkDestroyImage(device, depthImage, nullptr);
+    vkFreeMemory(device, depthImageMemory, nullptr);
+
     for (auto imageView : swapChainImageViews) {
         vkDestroyImageView(device, imageView, nullptr);
     }
@@ -1215,12 +1328,22 @@ void HelloTriangleApplication::recordCommandBuffer(VkCommandBuffer commandBuffer
     colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachment.clearValue.color = { {0.0f, 0.0f, 0.0f, 1.0f} };
 
+    VkRenderingAttachmentInfo depthAttachment{};
+    depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depthAttachment.imageView = depthImageView;
+    depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; // Clear depth at start of frame
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE; // We don't need it after
+    depthAttachment.clearValue.depthStencil = { 1.0f, 0 };
+
     VkRenderingInfo renderingInfo{};
     renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
     renderingInfo.renderArea = { {0, 0}, swapChainExtent };
     renderingInfo.layerCount = 1;
     renderingInfo.colorAttachmentCount = 1;
     renderingInfo.pColorAttachments = &colorAttachment;
+
+    renderingInfo.pDepthAttachment = &depthAttachment;
 
     vkCmdBeginRendering(commandBuffer, &renderingInfo);
 
@@ -1280,37 +1403,63 @@ void HelloTriangleApplication::recordCommandBuffer(VkCommandBuffer commandBuffer
 
     std::array<ObjectPushConstants, 3> materials = { mat1, mat2, mat3 };
 
-    for (int i = 0; i < 3; ++i) {
-        ObjectPushConstants pc = materials[i];
+    ObjectPushConstants pc = materials[0]; // Use the same material properties
 
-        glm::mat4 model = glm::mat4(1.0f);
+    // --- Draw ONE Box (Rock Outside, Wood Inside) ---
+    glm::mat4 model = glm::mat4(1.0f);
+    // model = glm::translate(model, glm::vec3(-1.0f, 0.0f, 0.0f)); // REMOVE THIS
+    model = glm::rotate(model, glm::radians(45.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 
-        // position cubes across X
-        model = glm::translate(model, glm::vec3(-2.5f + (i * 2.5f), 0.0f, 0.0f));
+    pc.model = model;
+    pc.texIndex = 1; // <-- Tell the box to use texture 1 (rock)
 
-        // rotate local +Z to align with camera front
-        //glm::vec3 localZ = glm::vec3(0.0f, 0.0f, 1.0f);
-        //glm::vec3 target = glm::normalize(cameraFront);
-        //if (glm::length(target) > 1e-6f) {
-        //    glm::quat q = glm::rotation(localZ, target);
-        //    model *= glm::mat4_cast(q);
-        //}
+    vkCmdPushConstants(
+        commandBuffer,
+        pipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        0,
+        sizeof(ObjectPushConstants),
+        &pc);
 
-        //// scale along local Z to create "road" impression
-        //model = glm::scale(model, glm::vec3(1.0f, 1.0f, 20.0f));
+    vkCmdDrawIndexed(commandBuffer, 24, 1, 0, 0, 0);
 
-        pc.model = model;
+    // Draw the 6th face (Bottom) - 6 indices, starting from index 30
+    vkCmdDrawIndexed(commandBuffer, 6, 1, 30, 0, 0);
 
-        vkCmdPushConstants(
-            commandBuffer,
-            pipelineLayout,
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            0,
-            sizeof(ObjectPushConstants),
-            &pc);
+    // =======================================================
 
-        vkCmdDrawIndexed(commandBuffer, static_cast<uint16_t>(indices.size()), 1, 0, 0, 0);
-    }
+
+    //for (int i = 0; i < 3; ++i) {
+    //    ObjectPushConstants pc = materials[i];
+
+    //    glm::mat4 model = glm::mat4(1.0f);
+
+    //    // position cubes across X
+    //    model = glm::translate(model, glm::vec3(-2.5f + (i * 2.5f), 0.0f, 0.0f));
+
+    //    // rotate local +Z to align with camera front
+    //    //glm::vec3 localZ = glm::vec3(0.0f, 0.0f, 1.0f);
+    //    //glm::vec3 target = glm::normalize(cameraFront);
+    //    //if (glm::length(target) > 1e-6f) {
+    //    //    glm::quat q = glm::rotation(localZ, target);
+    //    //    model *= glm::mat4_cast(q);
+    //    //}
+
+    //    //// scale along local Z to create "road" impression
+    //    //model = glm::scale(model, glm::vec3(1.0f, 1.0f, 20.0f));
+
+    //    pc.model = model;
+
+    //    vkCmdPushConstants(
+    //        commandBuffer,
+    //        pipelineLayout,
+    //        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+    //        0,
+    //        sizeof(ObjectPushConstants),
+    //        &pc);
+
+    //    vkCmdDrawIndexed(commandBuffer, static_cast<uint16_t>(indices.size()), 1, 0, 0, 0);
+    //}
 
     //for (int i = 0; i < 3; ++i) {
     //    ObjectPushConstants pc = materials[i];
@@ -1976,12 +2125,23 @@ VkCommandBuffer HelloTriangleApplication::beginSingleTimeCommands() {
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     allocInfo.commandPool = commandPool;
     allocInfo.commandBufferCount = 1;
+
     VkCommandBuffer commandBuffer;
-    vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer);
+
+    // --- ADD THIS CHECK ---
+    VkResult result = vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer);
+    if (result != VK_SUCCESS) {
+        throw std::runtime_error("failed to allocate single-time command buffer!");
+    }
+    // --- END OF CHECK ---
+
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    // This will no longer crash
     vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
     return commandBuffer;
 }
 

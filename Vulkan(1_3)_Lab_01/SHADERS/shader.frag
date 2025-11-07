@@ -3,19 +3,29 @@
 layout(location = 0) in vec3 vColor;
 layout(location = 1) in vec2 vUV;
 
+layout(location = 2) in flat int vTexIndex;
+
 layout(location = 0) out vec4 outColor;
 
-layout(set = 0, binding = 1) uniform sampler2D coinTex;
+layout(set = 0, binding = 1) uniform sampler2D mainTex;
 layout(set = 0, binding = 2) uniform sampler2D tileTex;
 
 void main() {
-    vec3 coin = texture(coinTex, vUV).rgb;
+    vec3 color;
 
-    // Repeat the tile texture to add detail
-    vec2 tileUV = vUV * 4.0;
-    vec3 tile = texture(tileTex, tileUV).rgb;
-
-    // Detail multiply (keeps coin as main albedo, modulated by tiles)
-    vec3 combined = coin * (tile * 0.9 + 0.1);
-    outColor = vec4(combined, 1.0);
+    if (gl_FrontFacing) {
+        // --- This is an OUTSIDE face ---
+        // Use the index from the C++ code
+        if (vTexIndex == 0) {
+            color = texture(mainTex, vUV).rgb; // wood
+        } else {
+            color = texture(tileTex, vUV).rgb; // rock
+        }
+    } else {
+        // --- This is an INSIDE face ---
+        // Always use the wood texture
+        color = texture(mainTex, vUV).rgb; 
+    }
+    
+    outColor = vec4(color, 1.0);
 }
