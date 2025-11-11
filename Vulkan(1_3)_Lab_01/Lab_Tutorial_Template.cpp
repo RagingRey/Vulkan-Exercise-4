@@ -230,6 +230,11 @@ VkDeviceMemory normalTextureImageMemory = VK_NULL_HANDLE;
 VkImageView normalTextureImageView = VK_NULL_HANDLE;
 VkSampler normalTextureSampler = VK_NULL_HANDLE;
 
+VkImage heightTextureImage = VK_NULL_HANDLE;
+VkDeviceMemory heightTextureImageMemory = VK_NULL_HANDLE;
+VkImageView heightTextureImageView = VK_NULL_HANDLE;
+VkSampler heightTextureSampler = VK_NULL_HANDLE;
+
 // Helper to compute tangents/binormals for indexed geometry (simple MikkTSpace-free version)
 static void GenerateTangents(std::vector<Vertex>& verts, const std::vector<uint16_t>& idx) {
     // zero
@@ -438,6 +443,7 @@ private:
     void createSecondTextureFromFile(const std::string& filename);
     void createTextureSampler(VkSampler& outSampler, int mode);
     void createNormalTextureFromFile(const std::string& filename);
+    void createHeightTextureFromFile(const std::string& filename);
     void updateDescriptorSetsSampler();
 
 
@@ -547,7 +553,8 @@ void HelloTriangleApplication::initVulkan() {
     // These functions also use the command pool
     createTextureFromFile("stones.png");
     //createSecondTextureFromFile("rock.jpg");
-	createNormalTextureFromFile("rockNormal.png");
+	//createNormalTextureFromFile("rockNormal.png");
+    createHeightTextureFromFile("rockheight.png");
 
     createVertexBuffer();
     createIndexBuffer();
@@ -869,7 +876,7 @@ void HelloTriangleApplication::createDescriptorSetLayout() {
     uboLayoutBinding.binding = 0;
     uboLayoutBinding.descriptorCount = 1;
     uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; // <- fixed
-    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;;
     uboLayoutBinding.pImmutableSamplers = nullptr;
 
     // Binding 1: coin texture
@@ -1146,10 +1153,15 @@ void HelloTriangleApplication::createDescriptorSets() {
         tileInfo.imageView = tileTextureImageView;
         tileInfo.sampler = tileTextureSampler;*/
 
-        VkDescriptorImageInfo normalInfo{};
+       /* VkDescriptorImageInfo normalInfo{};
         normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         normalInfo.imageView = normalTextureImageView;
-        normalInfo.sampler = normalTextureSampler;
+        normalInfo.sampler = normalTextureSampler;*/
+
+        VkDescriptorImageInfo heightInfo{};
+        heightInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        heightInfo.imageView = heightTextureImageView;
+        heightInfo.sampler = heightTextureSampler;
 
         std::array<VkWriteDescriptorSet, 3> writes{};
 
@@ -1178,7 +1190,7 @@ void HelloTriangleApplication::createDescriptorSets() {
         writes[2].dstArrayElement = 0;
         writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[2].descriptorCount = 1;
-        writes[2].pImageInfo = &normalInfo;
+        writes[2].pImageInfo = &heightInfo;
 
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
@@ -1592,7 +1604,8 @@ void HelloTriangleApplication::updateUniformBuffer(uint32_t currentImage) {
     if (textureFilterMode != prevTextureFilterMode) {
         // recreate the sampler using the new mode (createTextureSampler will update descriptor sets)
         createTextureSampler(textureSampler, textureFilterMode);
-        createTextureSampler(tileTextureSampler, textureFilterMode);
+        //createTextureSampler(tileTextureSampler, textureFilterMode);
+        createTextureSampler(heightTextureSampler, textureFilterMode);
         prevTextureFilterMode = textureFilterMode;
         std::cout << "Texture filter mode changed to " << textureFilterMode << std::endl;
     }
@@ -1996,6 +2009,69 @@ void HelloTriangleApplication::createNormalTextureFromFile(const std::string& fi
     createTextureSampler(normalTextureSampler, textureFilterMode);
 }
 
+void HelloTriangleApplication::createHeightTextureFromFile(const std::string& filename)
+{
+    int w, h, c;
+    stbi_uc* pixels = stbi_load(filename.c_str(), &w, &h, &c, STBI_rgb_alpha);
+    if (!pixels) throw std::runtime_error("failed to load height map: " + filename);
+    VkDeviceSize size = (VkDeviceSize)w * h * 4;
+
+    VkBuffer staging;
+    VkDeviceMemory stagingMem;
+    createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        staging, stagingMem);
+
+    void* data;
+    vkMapMemory(device, stagingMem, 0, size, 0, &data);
+    memcpy(data, pixels, (size_t)size);
+    vkUnmapMemory(device, stagingMem);
+    stbi_image_free(pixels);
+
+    VkImageCreateInfo img{};
+    img.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    img.imageType = VK_IMAGE_TYPE_2D;
+    img.extent = { (uint32_t)w,(uint32_t)h,1 };
+    img.mipLevels = 1;
+    img.arrayLayers = 1;
+    img.format = VK_FORMAT_R8G8B8A8_UNORM; // height map UNORM
+    img.tiling = VK_IMAGE_TILING_OPTIMAL;
+    img.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    img.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    img.samples = VK_SAMPLE_COUNT_1_BIT;
+    img.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateImage(device, &img, nullptr, &heightTextureImage) != VK_SUCCESS)
+        throw std::runtime_error("failed to create height image");
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(device, heightTextureImage, &req);
+    VkMemoryAllocateInfo alloc{};
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = req.size;
+    alloc.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (vkAllocateMemory(device, &alloc, nullptr, &heightTextureImageMemory) != VK_SUCCESS)
+        throw std::runtime_error("failed to alloc height image memory");
+    vkBindImageMemory(device, heightTextureImage, heightTextureImageMemory, 0);
+
+    transitionImageLayout(heightTextureImage,
+        VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT);
+
+    copyBufferToImage(staging, heightTextureImage, (uint32_t)w, (uint32_t)h);
+
+    transitionImageLayout(heightTextureImage,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT);
+
+    vkDestroyBuffer(device, staging, nullptr);
+    vkFreeMemory(device, stagingMem, nullptr);
+
+    heightTextureImageView = createImageView(heightTextureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT);
+    createTextureSampler(heightTextureSampler, textureFilterMode);
+}
+
 void HelloTriangleApplication::createSecondTextureFromFile(const std::string & filename)
 {
     int texWidth, texHeight, texChannels;
@@ -2151,10 +2227,15 @@ void HelloTriangleApplication::updateDescriptorSetsSampler()
         tileInfo.imageView = tileTextureImageView;
         tileInfo.sampler = tileTextureSampler;*/
 
-        VkDescriptorImageInfo normalInfo{};
+        /*VkDescriptorImageInfo normalInfo{};
         normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         normalInfo.imageView = normalTextureImageView;
-        normalInfo.sampler = normalTextureSampler;
+        normalInfo.sampler = normalTextureSampler;*/
+
+        VkDescriptorImageInfo heightInfo{};
+        heightInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        heightInfo.imageView = heightTextureImageView;
+        heightInfo.sampler = heightTextureSampler;
 
         std::array<VkWriteDescriptorSet, 2> writes{};
 
@@ -2172,7 +2253,7 @@ void HelloTriangleApplication::updateDescriptorSetsSampler()
         writes[1].dstBinding = 2;
         writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[1].descriptorCount = 1;
-        writes[1].pImageInfo = &normalInfo;
+        writes[1].pImageInfo = &heightInfo;
 
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
