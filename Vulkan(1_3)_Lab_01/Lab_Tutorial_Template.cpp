@@ -71,6 +71,8 @@ struct Vertex {
     glm::vec3 color;
     glm::vec3 normal;
     glm::vec2 texCoord;
+    glm::vec3 tangent; // New
+    glm::vec3 binormal;
 
     static VkVertexInputBindingDescription getBindingDescription() {
         VkVertexInputBindingDescription bindingDescription{};
@@ -80,12 +82,14 @@ struct Vertex {
         return bindingDescription;
     }
 
-    static std::array<VkVertexInputAttributeDescription, 4> getAttributeDescriptions() {
-        std::array<VkVertexInputAttributeDescription, 4> attributeDescriptions{};
+    static std::array<VkVertexInputAttributeDescription, 6> getAttributeDescriptions() {
+        std::array<VkVertexInputAttributeDescription, 6> attributeDescriptions{};
         attributeDescriptions[0] = { 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, pos) };
         attributeDescriptions[1] = { 1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, color) };
         attributeDescriptions[2] = { 2, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal) };
         attributeDescriptions[3] = { 3, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, texCoord) };
+        attributeDescriptions[4] = { 4, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, tangent) };
+        attributeDescriptions[5] = { 5, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, binormal) };
         return attributeDescriptions;
     }
 };
@@ -129,10 +133,10 @@ enum TextureFilterMode {
 };
 
 const std::vector<Vertex> Quad_vertices = {
-    {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}},
-    {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}},
-    {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}},
-    {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}}
+    {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, { 0.0f, 0.0f, 1.0f }, {0.0f, 1.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f} },
+    {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, { 0.0f, 0.0f, 1.0f }, { 1.0f, 1.0f }, { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }},
+    {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, { 0.0f, 0.0f, 1.0f }, { 0.0f, 1.0f }, { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }},
+    {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, { 0.0f, 0.0f, 1.0f }, { 1.0f, 1.0f }, { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }}
 };
 
 const std::vector<uint16_t> Quad_indices = {
@@ -221,9 +225,61 @@ VkDeviceMemory tileTextureImageMemory = VK_NULL_HANDLE;
 VkImageView tileTextureImageView = VK_NULL_HANDLE;
 VkSampler tileTextureSampler = VK_NULL_HANDLE;
 
+VkImage normalTextureImage = VK_NULL_HANDLE;
+VkDeviceMemory normalTextureImageMemory = VK_NULL_HANDLE;
+VkImageView normalTextureImageView = VK_NULL_HANDLE;
+VkSampler normalTextureSampler = VK_NULL_HANDLE;
+
+// Helper to compute tangents/binormals for indexed geometry (simple MikkTSpace-free version)
+static void GenerateTangents(std::vector<Vertex>& verts, const std::vector<uint16_t>& idx) {
+    // zero
+    for (auto& v : verts) {
+        v.tangent = glm::vec3(0);
+        v.binormal = glm::vec3(0);
+    }
+    for (size_t i = 0; i < idx.size(); i += 3) {
+        Vertex& v0 = verts[idx[i + 0]];
+        Vertex& v1 = verts[idx[i + 1]];
+        Vertex& v2 = verts[idx[i + 2]];
+
+        glm::vec3 p0 = v0.pos;
+        glm::vec3 p1 = v1.pos;
+        glm::vec3 p2 = v2.pos;
+
+        glm::vec2 uv0 = v0.texCoord;
+        glm::vec2 uv1 = v1.texCoord;
+        glm::vec2 uv2 = v2.texCoord;
+
+        glm::vec3 dp1 = p1 - p0;
+        glm::vec3 dp2 = p2 - p0;
+        glm::vec2 duv1 = uv1 - uv0;
+        glm::vec2 duv2 = uv2 - uv0;
+
+        float r = (duv1.x * duv2.y - duv1.y * duv2.x);
+        if (fabs(r) < 1e-8f) r = 1.0f; else r = 1.0f / r;
+
+        glm::vec3 T = (dp1 * duv2.y - dp2 * duv1.y) * r;
+        glm::vec3 B = (dp2 * duv1.x - dp1 * duv2.x) * r;
+
+        v0.tangent += T; v1.tangent += T; v2.tangent += T;
+        v0.binormal += B; v1.binormal += B; v2.binormal += B;
+    }
+    for (auto& v : verts) {
+        v.tangent = glm::normalize(v.tangent);
+        v.binormal = glm::normalize(v.binormal);
+        // (Optional) re-orthogonalize: v.tangent = normalize(v.tangent - v.normal * dot(v.normal,v.tangent));
+    }
+}
+
 void loadModel() {
     vertices = Cube_vertices;
+
+    for (auto& v : vertices) {
+        v.tangent = glm::vec3(1, 0, 0);
+        v.binormal = glm::vec3(0, 1, 0);
+    }
     indices = Cube_indices;
+    GenerateTangents(vertices, Cube_indices);
 }
 
 
@@ -381,6 +437,7 @@ private:
     void createTextureFromFile(const std::string& filename);
     void createSecondTextureFromFile(const std::string& filename);
     void createTextureSampler(VkSampler& outSampler, int mode);
+    void createNormalTextureFromFile(const std::string& filename);
     void updateDescriptorSetsSampler();
 
 
@@ -488,8 +545,9 @@ void HelloTriangleApplication::initVulkan() {
     loadModel();
 
     // These functions also use the command pool
-    createTextureFromFile("Wood2.jpg");
-    createSecondTextureFromFile("rock.jpg");
+    createTextureFromFile("stones.png");
+    //createSecondTextureFromFile("rock.jpg");
+	createNormalTextureFromFile("rockNormal.png");
 
     createVertexBuffer();
     createIndexBuffer();
@@ -1078,15 +1136,20 @@ void HelloTriangleApplication::createDescriptorSets() {
         bufferInfo.offset = 0;
         bufferInfo.range = sizeof(SceneUniformBufferObject);
 
-        VkDescriptorImageInfo coinInfo{};
-        coinInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        coinInfo.imageView = textureImageView;
-        coinInfo.sampler = textureSampler;
+        VkDescriptorImageInfo colorInfo{};
+        colorInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        colorInfo.imageView = textureImageView;
+        colorInfo.sampler = textureSampler;
 
-        VkDescriptorImageInfo tileInfo{};
+        /*VkDescriptorImageInfo tileInfo{};
         tileInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         tileInfo.imageView = tileTextureImageView;
-        tileInfo.sampler = tileTextureSampler;
+        tileInfo.sampler = tileTextureSampler;*/
+
+        VkDescriptorImageInfo normalInfo{};
+        normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        normalInfo.imageView = normalTextureImageView;
+        normalInfo.sampler = normalTextureSampler;
 
         std::array<VkWriteDescriptorSet, 3> writes{};
 
@@ -1106,7 +1169,7 @@ void HelloTriangleApplication::createDescriptorSets() {
         writes[1].dstArrayElement = 0;
         writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[1].descriptorCount = 1;
-        writes[1].pImageInfo = &coinInfo;
+        writes[1].pImageInfo = &colorInfo;
 
         // Binding 2: tile
         writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1115,7 +1178,7 @@ void HelloTriangleApplication::createDescriptorSets() {
         writes[2].dstArrayElement = 0;
         writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[2].descriptorCount = 1;
-        writes[2].pImageInfo = &tileInfo;
+        writes[2].pImageInfo = &normalInfo;
 
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
@@ -1865,6 +1928,74 @@ void HelloTriangleApplication::createTextureFromFile(const std::string& filename
     textureSamplers.push_back(sampler);*/
 }
 
+void HelloTriangleApplication::createNormalTextureFromFile(const std::string& filename) {
+    int texWidth, texHeight, texChannels;
+    stbi_uc* pixels = stbi_load(filename.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+    if (!pixels) throw std::runtime_error("failed to load normal map: " + filename);
+
+    VkDeviceSize imageSize = static_cast<VkDeviceSize>(texWidth) * texHeight * 4;
+
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingMemory;
+    createBuffer(imageSize,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        stagingBuffer, stagingMemory);
+
+    void* data;
+    vkMapMemory(device, stagingMemory, 0, imageSize, 0, &data);
+    memcpy(data, pixels, (size_t)imageSize);
+    vkUnmapMemory(device, stagingMemory);
+    stbi_image_free(pixels);
+
+    VkImageCreateInfo imgInfo{};
+    imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imgInfo.imageType = VK_IMAGE_TYPE_2D;
+    imgInfo.extent = { (uint32_t)texWidth,(uint32_t)texHeight,1 };
+    imgInfo.mipLevels = 1;
+    imgInfo.arrayLayers = 1;
+    imgInfo.format = VK_FORMAT_R8G8B8A8_UNORM; // normal maps: UNORM (no SRGB)
+    imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imgInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateImage(device, &imgInfo, nullptr, &normalTextureImage) != VK_SUCCESS)
+        throw std::runtime_error("failed to create normal image");
+
+    VkMemoryRequirements memReq;
+    vkGetImageMemoryRequirements(device, normalTextureImage, &memReq);
+
+    VkMemoryAllocateInfo alloc{};
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = memReq.size;
+    alloc.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (vkAllocateMemory(device, &alloc, nullptr, &normalTextureImageMemory) != VK_SUCCESS)
+        throw std::runtime_error("failed to alloc normal image memory");
+
+    vkBindImageMemory(device, normalTextureImage, normalTextureImageMemory, 0);
+
+    transitionImageLayout(normalTextureImage,
+        VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT);
+
+    copyBufferToImage(stagingBuffer, normalTextureImage, (uint32_t)texWidth, (uint32_t)texHeight);
+
+    transitionImageLayout(normalTextureImage,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT);
+
+    vkDestroyBuffer(device, stagingBuffer, nullptr);
+    vkFreeMemory(device, stagingMemory, nullptr);
+
+    normalTextureImageView = createImageView(normalTextureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT);
+
+    createTextureSampler(normalTextureSampler, textureFilterMode);
+}
+
 void HelloTriangleApplication::createSecondTextureFromFile(const std::string & filename)
 {
     int texWidth, texHeight, texChannels;
@@ -2010,15 +2141,20 @@ void HelloTriangleApplication::updateDescriptorSetsSampler()
     if (descriptorSets.empty()) return;
 
     for (size_t i = 0; i < descriptorSets.size(); ++i) {
-        VkDescriptorImageInfo coinInfo{};
-        coinInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        coinInfo.imageView = textureImageView;
-        coinInfo.sampler = textureSampler;
+        VkDescriptorImageInfo colorInfo{};
+        colorInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        colorInfo.imageView = textureImageView;
+        colorInfo.sampler = textureSampler;
 
-        VkDescriptorImageInfo tileInfo{};
+       /* VkDescriptorImageInfo tileInfo{};
         tileInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         tileInfo.imageView = tileTextureImageView;
-        tileInfo.sampler = tileTextureSampler;
+        tileInfo.sampler = tileTextureSampler;*/
+
+        VkDescriptorImageInfo normalInfo{};
+        normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        normalInfo.imageView = normalTextureImageView;
+        normalInfo.sampler = normalTextureSampler;
 
         std::array<VkWriteDescriptorSet, 2> writes{};
 
@@ -2028,7 +2164,7 @@ void HelloTriangleApplication::updateDescriptorSetsSampler()
         writes[0].dstBinding = 1;
         writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[0].descriptorCount = 1;
-        writes[0].pImageInfo = &coinInfo;
+        writes[0].pImageInfo = &colorInfo;
 
         // Rebind tile sampler
         writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -2036,7 +2172,7 @@ void HelloTriangleApplication::updateDescriptorSetsSampler()
         writes[1].dstBinding = 2;
         writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[1].descriptorCount = 1;
-        writes[1].pImageInfo = &tileInfo;
+        writes[1].pImageInfo = &normalInfo;
 
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
