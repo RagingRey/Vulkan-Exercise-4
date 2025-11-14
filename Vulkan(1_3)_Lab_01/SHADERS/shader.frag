@@ -18,8 +18,10 @@ layout(push_constant) uniform ObjectData {
     int   texIndex;
 } pc;
 
-// Optional albedo texture (use a bound texture if you have one)
+// Samplers: color, normal, height
 layout(set=0,binding=1) uniform sampler2D colSampler;
+layout(set=0,binding=2) uniform sampler2D normalSampler;
+layout(set=0,binding=3) uniform sampler2D heightSampler;
 
 layout(location=0) in vec3 fragWorldPos;
 layout(location=1) in vec3 fragWorldNormal;
@@ -27,7 +29,7 @@ layout(location=2) in vec2 fragTexCoord;
 
 layout(location=0) out vec4 outColor;
 
-// Build TBN from screen-space derivatives (no vertex tangents needed)
+// Derivative-based TBN (replace with vertex tangents for production)
 mat3 computeTBN(vec3 N, vec3 P, vec2 uv)
 {
     vec3 dpdx = dFdx(P);
@@ -39,54 +41,92 @@ mat3 computeTBN(vec3 N, vec3 P, vec2 uv)
     vec3 T = (dpdx * dtdy.y - dpdy * dtdx.y) * r;
     vec3 B = (dpdy * dtdx.x - dpdx * dtdy.x) * r;
 
-    // Orthonormalize
     vec3 n = normalize(N);
     vec3 t = normalize(T - n * dot(n, T));
     vec3 b = normalize(cross(n, t));
     return mat3(t, b, n);
 }
 
-// Generate a tiled hemisphere normal in tangent space
-vec3 hemisphereBumpTS(vec2 uv, float tiles, float radius)
+// Parallax Occlusion Mapping (ray march + linear refinement)
+vec2 parallaxOcclusionMapping(vec2 uv, vec3 viewDirTan)
 {
-    // Local uv in [-1, 1] within each tile
-    vec2 uvLocal = fract(uv * tiles) * 2.0 - 1.0;
+    // Prevent extreme division issues
+    if (viewDirTan.z <= 0.001)
+        return uv;
 
-    float R2 = radius * radius;
-    float r2 = dot(uvLocal, uvLocal);
+    // Parameters
+    float heightScale = 0.05;       // Depth strength (tune)
+    int   minLayers   = 16;         // Performance vs quality
+    int   maxLayers   = 48;
+    float numLayers = mix(float(maxLayers), float(minLayers), abs(viewDirTan.z));
+    float layerDepth = 1.0 / numLayers;
 
-    // Default: flat surface
-    vec3 N_tan = vec3(0.0, 0.0, 1.0);
+    // Direction to step in UV space
+    vec2 deltaUV = (viewDirTan.xy / viewDirTan.z) * heightScale / numLayers;
 
-    if (r2 < R2)
+    float currentDepth = 0.0;
+    float currentHeight = texture(heightSampler, uv).r;
+
+    // March until we pass surface height
+    while (currentDepth < currentHeight && numLayers > 0.0)
     {
-        // Hemisphere of radius=1 mapped onto disk of radius "radius"
-        vec2 p = uvLocal / radius;
-        float z = sqrt(max(0.0, 1.0 - dot(p, p)));
-        N_tan = normalize(vec3(p.x, p.y, z));
+        uv -= deltaUV;
+        currentDepth += layerDepth;
+        currentHeight = texture(heightSampler, uv).r;
     }
-    return N_tan;
+
+    // Linear refinement between last two positions
+    vec2 uvAfter = uv;
+    vec2 uvBefore = uv + deltaUV;
+
+    float depthAfter  = currentDepth;
+    float depthBefore = currentDepth - layerDepth;
+
+    float heightAfter  = currentHeight;
+    float heightBefore = texture(heightSampler, uvBefore).r;
+
+    float weight = (heightBefore - depthBefore) /
+                   ((heightBefore - depthBefore) - (heightAfter - depthAfter));
+    weight = clamp(weight, 0.0, 1.0);
+
+    vec2 refinedUV = mix(uvAfter, uvBefore, weight);
+    return refinedUV;
 }
 
 void main()
 {
-    // Base color (fallback to gray if no texture bound)
-    vec3 albedo = texture(colSampler, fragTexCoord).rgb;
-    if (albedo == vec3(0.0)) { albedo = vec3(0.6); }
-
-    // TBN from derivatives
+    // Base TBN
     mat3 TBN = computeTBN(normalize(fragWorldNormal), fragWorldPos, fragTexCoord);
 
-    // Procedural normal in tangent space
-    float tiles  = 5.0;   // number of bumps per UV axis
-    float radius = 0.7;   // bump radius inside each tile (0..1)
-    vec3 N_tan   = hemisphereBumpTS(fragTexCoord, tiles, radius);
+    // View direction world -> tangent
+    vec3 viewDirWorld = normalize(ubo.eyePos - fragWorldPos);
+    vec3 viewDirTan   = transpose(TBN) * viewDirWorld; // world->tangent
 
-    // Transform to world space
-    vec3 N = normalize(TBN * N_tan);
+    // Displaced UV via parallax occlusion mapping
+    vec2 displacedUV = parallaxOcclusionMapping(fragTexCoord, viewDirTan);
 
-    // Phong lighting with two lights
-    vec3 V = normalize(ubo.eyePos - fragWorldPos);
+    // Optional: discard if outside (prevents stretching)
+    if (displacedUV.x < 0.0 || displacedUV.x > 1.0 ||
+        displacedUV.y < 0.0 || displacedUV.y > 1.0)
+    {
+        // Fade out instead of hard discard if desired:
+        // outColor = vec4(0.0); return;
+        displacedUV = clamp(displacedUV, 0.0, 1.0);
+    }
+
+    // Sample color
+    vec3 albedo = texture(colSampler, displacedUV).rgb;
+    if (albedo == vec3(0.0)) albedo = vec3(0.6);
+
+    // Sample and unpack normal map (tangent space)
+    vec3 nMap = texture(normalSampler, displacedUV).rgb * 2.0 - 1.0;
+    nMap = normalize(nMap);
+
+    // Final world space normal
+    vec3 N = normalize(TBN * nMap);
+
+    // Lighting
+    vec3 V = viewDirWorld;
 
     vec3 L1 = normalize(ubo.lightPos1 - fragWorldPos);
     vec3 H1 = normalize(L1 + V);
@@ -98,7 +138,7 @@ void main()
     float NdotL2 = max(dot(N, L2), 0.0);
     float spec2  = (NdotL2 > 0.0) ? pow(max(dot(N, H2), 0.0), max(pc.shininess, 1.0)) : 0.0;
 
-    vec3 ambient  = pc.ambientMat.rgb * 0.08;
+    vec3 ambient  = pc.ambientMat.rgb * 0.06;
     vec3 diffuse  = albedo * (NdotL1 + NdotL2);
     vec3 specular = pc.specularMat.rgb * (spec1 + spec2);
 
