@@ -1745,7 +1745,7 @@ void HelloTriangleApplication::recordCommandBuffer(VkCommandBuffer commandBuffer
     model = glm::rotate(model, glm::radians(45.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 
     pc.model = model;
-    pc.texIndex = 1; // <-- Tell the box to use texture 1 (rock)
+    pc.texIndex = 99; // <-- Tell the box to use texture 1 (rock)
 
     vkCmdPushConstants(
         commandBuffer,

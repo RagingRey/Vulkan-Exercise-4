@@ -21,20 +21,17 @@ layout(push_constant) uniform ObjectData {
 layout(location=0) in vec3 inPosition;
 layout(location=1) in vec3 inColor;
 layout(location=2) in vec3 inNormal;
-layout(location=3) in vec2 inTexCoord;
 
 layout(location=0) out vec3 fragWorldPos;
 layout(location=1) out vec3 fragWorldNormal;
 layout(location=2) out vec2 fragTexCoord;
 
 void main() {
-    vec4 worldPos = pc.model * vec4(inPosition, 1.0);
+    mat4 M = pc.model;
+    vec4 worldPos = M * vec4(inPosition, 1.0);
     fragWorldPos = worldPos.xyz;
+    fragWorldNormal = normalize(mat3(M) * inNormal);
 
-    mat3 normalMatrix = transpose(inverse(mat3(pc.model)));
-    fragWorldNormal = normalize(normalMatrix * inNormal);
-
-    fragTexCoord = inTexCoord;
-
+    // existing UV / other varying assignments...
     gl_Position = ubo.proj * ubo.view * worldPos;
 }
