@@ -124,6 +124,19 @@ struct UniformBufferObject {
     alignas(16) glm::vec3 eyePos;   // New
 };
 
+struct ParticleVertex {
+    glm::vec3 center; // world-space center; z also acts as seed in shaders
+    glm::vec2 corner; // (-1,-1), (1,-1), (1,1), (-1,1)
+};
+
+struct ParticleUBO {
+    glm::mat4 view;
+    glm::mat4 proj;
+    float time;
+    float particleSize;
+    float _pad0{ 0 }, _pad1{ 0 }, _pad2{ 0 }; // std140 padding
+};
+
 // Texture filter modes
 enum TextureFilterMode {
     FILTER_NEAREST = 0,
@@ -474,6 +487,45 @@ private:
     VkCommandBuffer beginSingleTimeCommands();
     void endSingleTimeCommands(VkCommandBuffer commandBuffer);
 
+    // --- Particle system resources ---
+    VkBuffer particleVertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory particleVertexMemory = VK_NULL_HANDLE;
+    VkBuffer particleIndexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory particleIndexMemory = VK_NULL_HANDLE;
+    uint32_t particleIndexCount = 0;
+
+    VkBuffer particleUBOBuffer[MAX_FRAMES_IN_FLIGHT];
+    VkDeviceMemory particleUBOMemory[MAX_FRAMES_IN_FLIGHT];
+    void* particleUBOMapped[MAX_FRAMES_IN_FLIGHT];
+
+    VkDescriptorSetLayout particleDescriptorSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout particlePipelineLayout = VK_NULL_HANDLE;
+    VkPipeline particlePipeline = VK_NULL_HANDLE;
+    VkDescriptorSet particleDescriptorSets[MAX_FRAMES_IN_FLIGHT];
+
+    void createParticleBuffers(uint32_t particleCount);
+    void createParticleUBOs();
+    void createParticleDescriptorSetLayout();
+    void allocateParticleDescriptorSets();
+    void createParticlePipeline();
+
+
+    void BuildParticleGeometry(std::vector<ParticleVertex>& vertices, std::vector<uint32_t>& indices, uint32_t particleCount);
+    VkVertexInputBindingDescription ParticleBinding();
+    std::array<VkVertexInputAttributeDescription, 2> ParticleAttributes();
+    VkDescriptorSetLayout CreateParticleSetLayout(VkDevice device);
+    void FillParticlePipelineStates(
+        VkPipelineRasterizationStateCreateInfo& rs,
+        VkPipelineDepthStencilStateCreateInfo& ds,
+        VkPipelineColorBlendAttachmentState& cb);
+    void UpdateParticleUBO(ParticleUBO& ubo, const glm::mat4& view, const glm::mat4& proj, float timeSeconds);
+    void DrawParticles(VkCommandBuffer cmd,
+        VkPipeline particlePipeline,
+        VkPipelineLayout particleLayout,
+        VkDescriptorSet particleSet,
+        VkBuffer vbo, VkDeviceSize vboOffset,
+        VkBuffer ibo, VkDeviceSize iboOffset,
+        uint32_t indexCount);
 
     // --- Callbacks ---
     static void framebufferResizeCallback(GLFWwindow* window, int width, int height);
@@ -800,11 +852,20 @@ void HelloTriangleApplication::initVulkan() {
     createSkyboxCubemap();
     createSkyboxPipeline();
 
+
     createVertexBuffer();
     createIndexBuffer();
     createUniformBuffers();
     createDescriptorPool();
     createDescriptorSets();
+
+    // --- Particle system init ---
+    createParticleDescriptorSetLayout();
+    createParticleBuffers(80);          // choose particle count (e.g., 80)
+    createParticleUBOs();
+    allocateParticleDescriptorSets();
+    createParticlePipeline();
+
     createCommandBuffers();
     createSyncObjects();
 }
@@ -848,7 +909,17 @@ void HelloTriangleApplication::cleanup() {
         vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
         vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
         vkDestroyFence(device, inFlightFences[i], nullptr);
+
+        vkDestroyBuffer(device, particleUBOBuffer[i], nullptr);
+        vkFreeMemory(device, particleUBOMemory[i], nullptr);
     }
+    vkDestroyBuffer(device, particleIndexBuffer, nullptr);
+    vkFreeMemory(device, particleIndexMemory, nullptr);
+    vkDestroyBuffer(device, particleVertexBuffer, nullptr);
+    vkFreeMemory(device, particleVertexMemory, nullptr);
+    vkDestroyPipeline(device, particlePipeline, nullptr);
+    vkDestroyPipelineLayout(device, particlePipelineLayout, nullptr);
+    vkDestroyDescriptorSetLayout(device, particleDescriptorSetLayout, nullptr);
 
     vkDestroyCommandPool(device, commandPool, nullptr);
     vkDestroyDevice(device, nullptr);
@@ -1375,7 +1446,7 @@ void HelloTriangleApplication::createDescriptorPool() {
 
     // Uniform buffers
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * 2;
 
     // We now have 3 sampled images per set (color + normal + height)
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -1385,7 +1456,7 @@ void HelloTriangleApplication::createDescriptorPool() {
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
-    poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * 2;
 
     if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("failed to create descriptor pool!");
@@ -1533,6 +1604,16 @@ void HelloTriangleApplication::drawFrame() {
 
     updateUniformBuffer(currentFrame);
 
+    ParticleUBO pubo{};
+    pubo.view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+    pubo.proj = glm::perspective(glm::radians(45.0f),
+        swapChainExtent.width / (float)swapChainExtent.height,
+        0.1f, 10.0f);
+    pubo.proj[1][1] *= -1;
+    pubo.time = (float)glfwGetTime();
+    pubo.particleSize = .3f;
+    memcpy(particleUBOMapped[currentFrame], &pubo, sizeof(pubo));
+
     vkResetFences(device, 1, &inFlightFences[currentFrame]);
     vkResetCommandBuffer(commandBuffers[currentFrame], 0);
     recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
@@ -1676,6 +1757,18 @@ void HelloTriangleApplication::recordCommandBuffer(VkCommandBuffer commandBuffer
     // No push constants needed for skybox (model unused or identity)
     vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 
+    // --- Particle pass ---
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, particlePipeline);
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        particlePipelineLayout, 0, 1, &particleDescriptorSets[currentFrame], 0, nullptr);
+    vkCmdSetViewport(commandBuffer, 0, 1, &vp);
+    vkCmdSetScissor(commandBuffer, 0, 1, &sc);
+
+    VkDeviceSize pOff = 0;
+    vkCmdBindVertexBuffers(commandBuffer, 0, 1, &particleVertexBuffer, &pOff);
+    vkCmdBindIndexBuffer(commandBuffer, particleIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+    // No push constants needed
+    vkCmdDrawIndexed(commandBuffer, particleIndexCount, 1, 0, 0, 0);
     
     // --- Main objects pass ---
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
@@ -2647,6 +2740,280 @@ void HelloTriangleApplication::endSingleTimeCommands(VkCommandBuffer commandBuff
     vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
     vkQueueWaitIdle(graphicsQueue);
     vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+}
+
+void HelloTriangleApplication::createParticleBuffers(uint32_t particleCount)
+{
+    std::vector<ParticleVertex> pVerts;
+    std::vector<uint32_t> pIdx;
+    BuildParticleGeometry(pVerts, pIdx, particleCount);
+    particleIndexCount = static_cast<uint32_t>(pIdx.size());
+
+    VkDeviceSize vSize = sizeof(ParticleVertex) * pVerts.size();
+    VkDeviceSize iSize = sizeof(uint32_t) * pIdx.size();
+
+    VkBuffer stagingV; VkDeviceMemory stagingVM;
+    createBuffer(vSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        stagingV, stagingVM);
+    void* data;
+    vkMapMemory(device, stagingVM, 0, vSize, 0, &data);
+    memcpy(data, pVerts.data(), (size_t)vSize);
+    vkUnmapMemory(device, stagingVM);
+
+    createBuffer(vSize,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        particleVertexBuffer, particleVertexMemory);
+    copyBuffer(stagingV, particleVertexBuffer, vSize);
+    vkDestroyBuffer(device, stagingV, nullptr);
+    vkFreeMemory(device, stagingVM, nullptr);
+
+    VkBuffer stagingI; VkDeviceMemory stagingIM;
+    createBuffer(iSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        stagingI, stagingIM);
+    vkMapMemory(device, stagingIM, 0, iSize, 0, &data);
+    memcpy(data, pIdx.data(), (size_t)iSize);
+    vkUnmapMemory(device, stagingIM);
+
+    createBuffer(iSize,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        particleIndexBuffer, particleIndexMemory);
+    copyBuffer(stagingI, particleIndexBuffer, iSize);
+    vkDestroyBuffer(device, stagingI, nullptr);
+    vkFreeMemory(device, stagingIM, nullptr);
+}
+
+void HelloTriangleApplication::createParticleUBOs()
+{
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        VkDeviceSize sz = sizeof(ParticleUBO);
+        createBuffer(sz, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            particleUBOBuffer[i], particleUBOMemory[i]);
+        vkMapMemory(device, particleUBOMemory[i], 0, sz, 0, &particleUBOMapped[i]);
+    }
+}
+
+void HelloTriangleApplication::createParticleDescriptorSetLayout()
+{
+    particleDescriptorSetLayout = CreateParticleSetLayout(device);
+}
+
+void HelloTriangleApplication::allocateParticleDescriptorSets()
+{
+    VkDescriptorSetLayout layouts[MAX_FRAMES_IN_FLIGHT];
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) layouts[i] = particleDescriptorSetLayout;
+
+    VkDescriptorSetAllocateInfo alloc{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+    alloc.descriptorPool = descriptorPool; // reuse existing pool (enough space)
+    alloc.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+    alloc.pSetLayouts = layouts;
+    if (vkAllocateDescriptorSets(device, &alloc, particleDescriptorSets) != VK_SUCCESS)
+        throw std::runtime_error("Failed to allocate particle descriptor sets");
+
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        VkDescriptorBufferInfo buf{};
+        buf.buffer = particleUBOBuffer[i];
+        buf.offset = 0;
+        buf.range = sizeof(ParticleUBO);
+
+        VkWriteDescriptorSet w{};
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = particleDescriptorSets[i];
+        w.dstBinding = 0;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        w.descriptorCount = 1;
+        w.pBufferInfo = &buf;
+        vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+    }
+}
+
+void HelloTriangleApplication::createParticlePipeline() {
+    auto vertCode = readFile("shaders/particle.vert.spv");
+    auto fragCode = readFile("shaders/particle.frag.spv");
+    VkShaderModule vmod = createShaderModule(vertCode);
+    VkShaderModule fmod = createShaderModule(fragCode);
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vmod;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fmod;
+    stages[1].pName = "main";
+
+    auto binding = ParticleBinding();
+    auto attrs = ParticleAttributes();
+    VkPipelineVertexInputStateCreateInfo vi{ VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+    vi.vertexBindingDescriptionCount = 1;
+    vi.pVertexBindingDescriptions = &binding;
+    vi.vertexAttributeDescriptionCount = (uint32_t)attrs.size();
+    vi.pVertexAttributeDescriptions = attrs.data();
+
+    VkPipelineInputAssemblyStateCreateInfo ia{ VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vp{ VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rs;
+    VkPipelineDepthStencilStateCreateInfo ds;
+    VkPipelineColorBlendAttachmentState cbAtt;
+    FillParticlePipelineStates(rs, ds, cbAtt);
+
+    VkPipelineMultisampleStateCreateInfo ms{ VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendStateCreateInfo cb{ VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
+    cb.attachmentCount = 1;
+    cb.pAttachments = &cbAtt;
+
+    std::vector<VkDynamicState> dyn = {
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_SCISSOR
+    };
+    VkPipelineDynamicStateCreateInfo dynInfo{ VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
+    dynInfo.dynamicStateCount = (uint32_t)dyn.size();
+    dynInfo.pDynamicStates = dyn.data();
+
+    // Particle pipeline layout: only its own descriptor set (no push constants needed)
+    VkPipelineLayoutCreateInfo pli{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+    pli.setLayoutCount = 1;
+    pli.pSetLayouts = &particleDescriptorSetLayout;
+    if (vkCreatePipelineLayout(device, &pli, nullptr, &particlePipelineLayout) != VK_SUCCESS)
+        throw std::runtime_error("Failed to create particle pipeline layout");
+
+    VkPipelineRenderingCreateInfo renderInfo{ VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+    renderInfo.colorAttachmentCount = 1;
+    renderInfo.pColorAttachmentFormats = &swapChainImageFormat;
+    renderInfo.depthAttachmentFormat = depthFormat;
+
+    VkGraphicsPipelineCreateInfo gp{ VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+    gp.pNext = &renderInfo;
+    gp.stageCount = 2;
+    gp.pStages = stages;
+    gp.pVertexInputState = &vi;
+    gp.pInputAssemblyState = &ia;
+    gp.pViewportState = &vp;
+    gp.pRasterizationState = &rs;
+    gp.pMultisampleState = &ms;
+    gp.pDepthStencilState = &ds;
+    gp.pColorBlendState = &cb;
+    gp.pDynamicState = &dynInfo;
+    gp.layout = particlePipelineLayout;
+    gp.renderPass = VK_NULL_HANDLE;
+    gp.subpass = 0;
+
+    if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gp, nullptr, &particlePipeline) != VK_SUCCESS)
+        throw std::runtime_error("Failed to create particle pipeline");
+
+    vkDestroyShaderModule(device, fmod, nullptr);
+    vkDestroyShaderModule(device, vmod, nullptr);
+}
+
+void HelloTriangleApplication::BuildParticleGeometry(std::vector<ParticleVertex>& vertices, std::vector<uint32_t>& indices, uint32_t particleCount)
+{
+    vertices.clear();
+    indices.clear();
+    const glm::vec2 corners[4] = { {-1,-1}, { 1,-1}, { 1, 1}, {-1, 1} };
+
+    for (uint32_t i = 0; i < particleCount; ++i) {
+        float seed = (particleCount > 1) ? (float)i / float(particleCount - 1) : 0.0f;
+        glm::vec3 center = glm::vec3(0.0f, 0.0f, seed); // xy at origin; z used as a unique seed
+
+        uint32_t base = static_cast<uint32_t>(vertices.size());
+        for (int c = 0; c < 4; ++c) {
+            vertices.push_back(ParticleVertex{ center, corners[c] });
+        }
+        // two triangles per quad
+        indices.insert(indices.end(), { base + 0, base + 1, base + 2, base + 2, base + 3, base + 0 });
+    }
+}
+
+VkVertexInputBindingDescription HelloTriangleApplication::ParticleBinding()
+{
+    VkVertexInputBindingDescription b{};
+    b.binding = 0;
+    b.stride = sizeof(ParticleVertex);
+    b.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    return b;
+}
+
+std::array<VkVertexInputAttributeDescription, 2> HelloTriangleApplication::ParticleAttributes()
+{
+    std::array<VkVertexInputAttributeDescription, 2> a{};
+    a[0] = { 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(ParticleVertex, center) }; // inParticlePos
+    a[1] = { 1, 0, VK_FORMAT_R32G32_SFLOAT,  offsetof(ParticleVertex, corner) };   // inCornerOffset
+    return a;
+}
+
+VkDescriptorSetLayout HelloTriangleApplication::CreateParticleSetLayout(VkDevice device)
+{
+    VkDescriptorSetLayoutBinding uboBinding{};
+    uboBinding.binding = 0;
+    uboBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    uboBinding.descriptorCount = 1;
+    uboBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT; // only vertex needs it
+    uboBinding.pImmutableSamplers = nullptr;
+
+    VkDescriptorSetLayoutCreateInfo info{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+    info.bindingCount = 1;
+    info.pBindings = &uboBinding;
+
+    VkDescriptorSetLayout layout{};
+    vkCreateDescriptorSetLayout(device, &info, nullptr, &layout);
+    return layout;
+}
+
+void HelloTriangleApplication::FillParticlePipelineStates(VkPipelineRasterizationStateCreateInfo& rs, VkPipelineDepthStencilStateCreateInfo& ds, VkPipelineColorBlendAttachmentState& cb)
+{
+    rs = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode = VK_CULL_MODE_NONE;
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+
+    ds = { VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
+    ds.depthTestEnable = VK_TRUE;
+    ds.depthWriteEnable = VK_FALSE; // important for blending among particles
+    ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+
+    cb = {};
+    cb.blendEnable = VK_TRUE;
+    cb.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    cb.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;            // additive fire
+    cb.colorBlendOp = VK_BLEND_OP_ADD;
+    cb.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    cb.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cb.alphaBlendOp = VK_BLEND_OP_ADD;
+    cb.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+}
+
+void HelloTriangleApplication::UpdateParticleUBO(ParticleUBO& ubo, const glm::mat4& view, const glm::mat4& proj, float timeSeconds)
+{
+    ubo.view = view;
+    ubo.proj = proj;
+    ubo.time = timeSeconds;
+}
+
+void HelloTriangleApplication::DrawParticles(VkCommandBuffer cmd, VkPipeline particlePipeline, VkPipelineLayout particleLayout, VkDescriptorSet particleSet, VkBuffer vbo, VkDeviceSize vboOffset, VkBuffer ibo, VkDeviceSize iboOffset, uint32_t indexCount)
+{
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, particlePipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, particleLayout, 0, 1, &particleSet, 0, nullptr);
+
+    VkBuffer buffers[] = { vbo };
+    VkDeviceSize offsets[] = { vboOffset };
+    vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
+    vkCmdBindIndexBuffer(cmd, ibo, iboOffset, VK_INDEX_TYPE_UINT32);
+
+    vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
 }
 
 // --- Callback Implementations ---

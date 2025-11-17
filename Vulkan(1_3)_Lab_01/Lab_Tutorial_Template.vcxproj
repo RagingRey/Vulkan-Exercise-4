@@ -121,7 +121,9 @@
 "%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)SHADERS\shader.vert"  -o "$(ProjectDir)shaders\vert.spv"
 "%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)SHADERS\shader.frag"  -o "$(ProjectDir)shaders\frag.spv"
 "%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)SHADERS\skybox.vert"  -o "$(ProjectDir)shaders\skybox.vert.spv"
-"%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)SHADERS\skybox.frag"  -o "$(ProjectDir)shaders\skybox.frag.spv"</Command>
+"%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)SHADERS\skybox.frag"  -o "$(ProjectDir)shaders\skybox.frag.spv"
+"%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)SHADERS\particle.vert"  -o "$(ProjectDir)shaders\particle.vert.spv"
+"%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)SHADERS\particle.frag"  -o "$(ProjectDir)shaders\particle.frag.spv"</Command>
     </PreBuildEvent>
     <PostBuildEvent>
       <Command>if not exist "$(TargetDir)shaders" mkdir "$(TargetDir)shaders"
@@ -188,7 +190,8 @@ xcopy /y /d "$(ProjectDir)shaders\*.spv" "$(TargetDir)shaders\"</Command>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
-    <None Include="reflection.frag" />
+    <None Include="particle.frag" />
+    <None Include="particle.vert" />
     <None Include="skybox.frag" />
     <None Include="skybox.vert" />
   </ItemGroup>
