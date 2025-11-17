@@ -22,6 +22,7 @@ layout(push_constant) uniform ObjectData {
 layout(set=0,binding=1) uniform sampler2D colSampler;
 layout(set=0,binding=2) uniform sampler2D normalSampler;
 layout(set=0,binding=3) uniform sampler2D heightSampler;
+layout(binding = 4) uniform samplerCube skySampler;
 
 layout(location=0) in vec3 fragWorldPos;
 layout(location=1) in vec3 fragWorldNormal;
@@ -127,6 +128,13 @@ void main()
 
     // Lighting
     vec3 V = viewDirWorld;
+
+    if (pc.texIndex == 99) {
+    vec3 R = reflect(-V, N);                 // reflect view around world-space normal
+    vec3 env = texture(skySampler, R).rgb;   // sample cubemap
+    outColor = vec4(env, 1.0);
+    return;                                  // skip regular lighting
+}
 
     vec3 L1 = normalize(ubo.lightPos1 - fragWorldPos);
     vec3 H1 = normalize(L1 + V);

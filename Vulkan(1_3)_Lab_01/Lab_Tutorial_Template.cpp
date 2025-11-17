@@ -331,6 +331,9 @@ public:
     int loadedTexHeight = 0;
     int prevTextureFilterMode = -1;
 
+    bool depthTestEnabled = true;
+    bool depthWriteEnabled = true;
+
 private:
     // --- Core Application Members ---
     GLFWwindow* window = {};
@@ -375,6 +378,24 @@ private:
     VkDeviceMemory depthImageMemory;
     VkImageView depthImageView;
     VkFormat depthFormat;
+
+    // --- Skybox resources ---
+    VkImage skyboxImage = VK_NULL_HANDLE;
+    VkDeviceMemory skyboxImageMemory = VK_NULL_HANDLE;
+    VkImageView skyboxImageView = VK_NULL_HANDLE;
+    VkSampler skyboxSampler = VK_NULL_HANDLE;
+    VkPipeline skyboxPipeline = VK_NULL_HANDLE;
+
+    std::vector<std::string> skyboxPaths = {
+        "cubemap_0(+X).jpg",  // +X (layer 0)
+        "cubemap_1(-X).jpg",   // -X (layer 1)
+        "cubemap_2(+Y).jpg",    // +Y (layer 2)
+        "cubemap_3(-Y).jpg", // -Y (layer 3)
+        "cubemap_4(+Z).jpg",  // +Z (layer 4)
+        "cubemap_5(-Z).jpg"    // -Z (layer 5)
+    };
+    void createSkyboxCubemap();
+	void createSkyboxPipeline();
 
     // --- Descriptors ---
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
@@ -510,6 +531,15 @@ void HelloTriangleApplication::processInput(GLFWwindow* window) {
     if (glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS) textureFilterMode = FILTER_LINEAR;
     if (glfwGetKey(window, GLFW_KEY_3) == GLFW_PRESS) textureFilterMode = FILTER_ANISOTROPIC;
     if (glfwGetKey(window, GLFW_KEY_4) == GLFW_PRESS) textureFilterMode = FILTER_BICUBIC;
+
+
+    // Depth test enable/disable (T = on, G = off)
+    if (glfwGetKey(window, GLFW_KEY_T) == GLFW_PRESS) depthTestEnabled = true;
+    if (glfwGetKey(window, GLFW_KEY_G) == GLFW_PRESS) depthTestEnabled = false;
+
+    // Depth write enable/disable (Y = on, H = off)
+    if (glfwGetKey(window, GLFW_KEY_Y) == GLFW_PRESS) depthWriteEnabled = true;
+    if (glfwGetKey(window, GLFW_KEY_H) == GLFW_PRESS) depthWriteEnabled = false;
 }
 
 void HelloTriangleApplication::run() {
@@ -517,6 +547,216 @@ void HelloTriangleApplication::run() {
     initVulkan();
     mainLoop();
     cleanup();
+}
+
+void HelloTriangleApplication::createSkyboxCubemap()
+{
+    int w[6], h[6], c[6];
+    std::vector<stbi_uc*> facePixels(6);
+    for (int i = 0; i < 6; ++i) {
+        facePixels[i] = stbi_load(skyboxPaths[i].c_str(), &w[i], &h[i], &c[i], STBI_rgb_alpha);
+        if (!facePixels[i]) throw std::runtime_error("Failed to load cubemap face: " + skyboxPaths[i]);
+        if (w[i] != w[0] || h[i] != h[0]) throw std::runtime_error("Cubemap faces must have same dimensions");
+    }
+    uint32_t faceWidth = (uint32_t)w[0];
+    uint32_t faceHeight = (uint32_t)h[0];
+    VkDeviceSize faceSize = VkDeviceSize(faceWidth) * faceHeight * 4;
+
+    // Create cube image (arrayLayers = 6)
+    VkImageCreateInfo img{};
+    img.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    img.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    img.imageType = VK_IMAGE_TYPE_2D;
+    img.format = VK_FORMAT_R8G8B8A8_SRGB;
+    img.extent = { faceWidth, faceHeight, 1 };
+    img.mipLevels = 1;
+    img.arrayLayers = 6;
+    img.samples = VK_SAMPLE_COUNT_1_BIT;
+    img.tiling = VK_IMAGE_TILING_OPTIMAL;
+    img.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    img.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    img.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (vkCreateImage(device, &img, nullptr, &skyboxImage) != VK_SUCCESS)
+        throw std::runtime_error("Failed to create cubemap image");
+
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(device, skyboxImage, &req);
+    VkMemoryAllocateInfo alloc{};
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = req.size;
+    alloc.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (vkAllocateMemory(device, &alloc, nullptr, &skyboxImageMemory) != VK_SUCCESS)
+        throw std::runtime_error("Failed to allocate cubemap memory");
+    vkBindImageMemory(device, skyboxImage, skyboxImageMemory, 0);
+
+    // Staging upload per face
+    for (int i = 0; i < 6; ++i) {
+        VkBuffer staging;
+        VkDeviceMemory stagingMem;
+        createBuffer(faceSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            staging, stagingMem);
+        void* data;
+        vkMapMemory(device, stagingMem, 0, faceSize, 0, &data);
+        memcpy(data, facePixels[i], (size_t)faceSize);
+        vkUnmapMemory(device, stagingMem);
+        stbi_image_free(facePixels[i]);
+
+        // Transition (only once before first copy)
+        if (i == 0) {
+            transitionImageLayout(skyboxImage,
+                VK_IMAGE_LAYOUT_UNDEFINED,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_ASPECT_COLOR_BIT);
+        }
+
+        VkCommandBuffer cmd = beginSingleTimeCommands();
+        VkBufferImageCopy region{};
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.mipLevel = 0;
+        region.imageSubresource.baseArrayLayer = i;
+        region.imageSubresource.layerCount = 1;
+        region.imageExtent = { faceWidth, faceHeight, 1 };
+        vkCmdCopyBufferToImage(cmd, staging, skyboxImage,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        endSingleTimeCommands(cmd);
+
+        vkDestroyBuffer(device, staging, nullptr);
+        vkFreeMemory(device, stagingMem, nullptr);
+    }
+
+    transitionImageLayout(skyboxImage,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT);
+
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = skyboxImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+    viewInfo.format = VK_FORMAT_R8G8B8A8_SRGB;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 6;
+    if (vkCreateImageView(device, &viewInfo, nullptr, &skyboxImageView) != VK_SUCCESS)
+        throw std::runtime_error("Failed to create cubemap image view");
+
+    VkSamplerCreateInfo samp{};
+    samp.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samp.magFilter = VK_FILTER_LINEAR;
+    samp.minFilter = VK_FILTER_LINEAR;
+    samp.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samp.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samp.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samp.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samp.maxLod = 0.0f;
+    if (vkCreateSampler(device, &samp, nullptr, &skyboxSampler) != VK_SUCCESS)
+        throw std::runtime_error("Failed to create cubemap sampler");
+}
+
+void HelloTriangleApplication::createSkyboxPipeline()
+{
+    auto vertCode = readFile("shaders/skybox.vert.spv");
+    auto fragCode = readFile("shaders/skybox.frag.spv");
+    VkShaderModule vert = createShaderModule(vertCode);
+    VkShaderModule frag = createShaderModule(fragCode);
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vert;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = frag;
+    stages[1].pName = "main";
+
+    auto bindingDescription = Vertex::getBindingDescription();
+    auto attributeDescriptions = Vertex::getAttributeDescriptions(); // we only use location 0
+
+    VkPipelineVertexInputStateCreateInfo vi{};
+    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vi.vertexBindingDescriptionCount = 1;
+    vi.pVertexBindingDescriptions = &bindingDescription;
+    vi.vertexAttributeDescriptionCount = 1; // only position
+    vi.pVertexAttributeDescriptions = &attributeDescriptions[0];
+
+    VkPipelineInputAssemblyStateCreateInfo ia{};
+    ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vp{};
+    vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rs{};
+    rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode = VK_CULL_MODE_FRONT_BIT; // inside the cube
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms{};
+    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo ds{};
+    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    ds.depthTestEnable = VK_TRUE;
+    ds.depthWriteEnable = VK_FALSE;
+    ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    ds.stencilTestEnable = VK_FALSE;
+
+    VkPipelineColorBlendAttachmentState cbAtt{};
+    cbAtt.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+    VkPipelineColorBlendStateCreateInfo cb{};
+    cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    cb.attachmentCount = 1;
+    cb.pAttachments = &cbAtt;
+
+    std::vector<VkDynamicState> dyn = {
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_SCISSOR
+    };
+    VkPipelineDynamicStateCreateInfo dynInfo{};
+    dynInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynInfo.dynamicStateCount = (uint32_t)dyn.size();
+    dynInfo.pDynamicStates = dyn.data();
+
+    // Reuse existing pipelineLayout (contains needed descriptor set & push constants not used here)
+    VkPipelineRenderingCreateInfo renderInfo{};
+    renderInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    renderInfo.colorAttachmentCount = 1;
+    renderInfo.pColorAttachmentFormats = &swapChainImageFormat;
+    renderInfo.depthAttachmentFormat = depthFormat;
+
+    VkGraphicsPipelineCreateInfo gp{};
+    gp.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    gp.pNext = &renderInfo;
+    gp.stageCount = 2;
+    gp.pStages = stages;
+    gp.pVertexInputState = &vi;
+    gp.pInputAssemblyState = &ia;
+    gp.pViewportState = &vp;
+    gp.pRasterizationState = &rs;
+    gp.pMultisampleState = &ms;
+    gp.pDepthStencilState = &ds;
+    gp.pColorBlendState = &cb;
+    gp.pDynamicState = &dynInfo;
+    gp.layout = pipelineLayout;
+    gp.renderPass = VK_NULL_HANDLE;
+    gp.subpass = 0;
+
+    if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gp, nullptr, &skyboxPipeline) != VK_SUCCESS)
+        throw std::runtime_error("Failed to create skybox pipeline");
+
+    vkDestroyShaderModule(device, frag, nullptr);
+    vkDestroyShaderModule(device, vert, nullptr);
 }
 
 void HelloTriangleApplication::initWindow() {
@@ -555,6 +795,10 @@ void HelloTriangleApplication::initVulkan() {
     //createSecondTextureFromFile("rock.jpg");
 	createNormalTextureFromFile("rockNormal.png");
     createHeightTextureFromFile("rockheight.png");
+
+    //Init Skyboxes
+    createSkyboxCubemap();
+    createSkyboxPipeline();
 
     createVertexBuffer();
     createIndexBuffer();
@@ -724,6 +968,13 @@ void HelloTriangleApplication::createLogicalDevice() {
     VkPhysicalDeviceFeatures2 deviceFeatures2{};
     deviceFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     deviceFeatures2.pNext = &dynamicRenderingFeatures;
+
+    VkPhysicalDeviceExtendedDynamicStateFeaturesEXT extDyn{};
+    extDyn.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT;
+    extDyn.extendedDynamicState = VK_TRUE;
+
+    extDyn.pNext = &sync2Features;
+    dynamicRenderingFeatures.pNext = &extDyn;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -899,8 +1150,15 @@ void HelloTriangleApplication::createDescriptorSetLayout() {
     heightBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     heightBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    std::array<VkDescriptorSetLayoutBinding, 4> bindings = {
-        uboLayoutBinding, colorBinding, normalBinding, heightBinding
+    //Skybox binding (binding 4)
+    VkDescriptorSetLayoutBinding skyboxBinding{};
+    skyboxBinding.binding = 4;
+    skyboxBinding.descriptorCount = 1;
+    skyboxBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    skyboxBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    std::array<VkDescriptorSetLayoutBinding, 5> bindings = {
+        uboLayoutBinding, colorBinding, normalBinding, heightBinding, skyboxBinding
     };
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
@@ -987,7 +1245,12 @@ void HelloTriangleApplication::createGraphicsPipeline() {
     colorBlending.attachmentCount = 1;
     colorBlending.pAttachments = &colorBlendAttachment;
 
-    std::vector<VkDynamicState> dynamicStates = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    std::vector<VkDynamicState> dynamicStates = {
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_SCISSOR,
+        VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE,
+        VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE
+    };
     VkPipelineDynamicStateCreateInfo dynamicState{};
     dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
     dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
@@ -1116,7 +1379,7 @@ void HelloTriangleApplication::createDescriptorPool() {
 
     // We now have 3 sampled images per set (color + normal + height)
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * 3;
+    poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * 4;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1164,7 +1427,13 @@ void HelloTriangleApplication::createDescriptorSets() {
         heightInfo.imageView = heightTextureImageView;
         heightInfo.sampler = heightTextureSampler;
 
-        std::array<VkWriteDescriptorSet, 4> writes{};
+        //Skyinfo
+        VkDescriptorImageInfo skyInfo{};
+        skyInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        skyInfo.imageView = skyboxImageView;
+        skyInfo.sampler = skyboxSampler;
+
+        std::array<VkWriteDescriptorSet, 5> writes{};
 
         // UBO
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1197,6 +1466,15 @@ void HelloTriangleApplication::createDescriptorSets() {
         writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[3].descriptorCount = 1;
         writes[3].pImageInfo = &heightInfo;
+
+        //Skybox
+        // (writes[0..3] unchanged)
+        writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[4].dstSet = descriptorSets[i];
+        writes[4].dstBinding = 4;
+        writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[4].descriptorCount = 1;
+        writes[4].pImageInfo = &skyInfo;
 
         vkUpdateDescriptorSets(device,
             static_cast<uint32_t>(writes.size()), writes.data(),
@@ -1383,7 +1661,27 @@ void HelloTriangleApplication::recordCommandBuffer(VkCommandBuffer commandBuffer
 
     vkCmdBeginRendering(commandBuffer, &renderingInfo);
 
+    // --- Skybox pass ---
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, skyboxPipeline);
+    // dynamic viewport/scissor already set later; set them now for clarity
+    VkViewport vp{ 0.0f,0.0f,(float)swapChainExtent.width,(float)swapChainExtent.height,0.0f,1.0f };
+    VkRect2D sc{ {0,0},swapChainExtent };
+    vkCmdSetViewport(commandBuffer, 0, 1, &vp);
+    vkCmdSetScissor(commandBuffer, 0, 1, &sc);
+    VkDeviceSize SkyOffsets[] = { 0 };
+    vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer, SkyOffsets);
+    vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        pipelineLayout, 0, 1, &descriptorSets[currentFrame], 0, nullptr);
+    // No push constants needed for skybox (model unused or identity)
+    vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
+
+    
+    // --- Main objects pass ---
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+    vkCmdSetDepthTestEnable(commandBuffer, depthTestEnabled ? VK_TRUE : VK_FALSE);
+    vkCmdSetDepthWriteEnable(commandBuffer, depthWriteEnabled ? VK_TRUE : VK_FALSE);
+
 
     // NEW: Set dynamic viewport and scissor (required since they are dynamic states)
     VkViewport viewport{};
@@ -1460,7 +1758,7 @@ void HelloTriangleApplication::recordCommandBuffer(VkCommandBuffer commandBuffer
     vkCmdDrawIndexed(commandBuffer, 24, 1, 0, 0, 0);
 
     // Draw the 6th face (Bottom) - 6 indices, starting from index 30
-    vkCmdDrawIndexed(commandBuffer, 6, 1, 30, 0, 0);
+    vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 30, 0, 0);
 
     // =======================================================
 
@@ -2192,7 +2490,7 @@ void HelloTriangleApplication::updateDescriptorSetsSampler() {
         heightInfo.imageView = heightTextureImageView;
         heightInfo.sampler = heightTextureSampler;
 
-        std::array<VkWriteDescriptorSet, 3> writes{};
+        std::array<VkWriteDescriptorSet, 4> writes{};
 
         // Color
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -2217,6 +2515,19 @@ void HelloTriangleApplication::updateDescriptorSetsSampler() {
         writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[2].descriptorCount = 1;
         writes[2].pImageInfo = &heightInfo;
+
+        VkDescriptorImageInfo skyInfo{};
+        skyInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        skyInfo.imageView = skyboxImageView;
+        skyInfo.sampler = skyboxSampler;
+
+        // existing 3 writes plus:
+        writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[3].dstSet = descriptorSets[i];
+        writes[3].dstBinding = 4;
+        writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[3].descriptorCount = 1;
+        writes[3].pImageInfo = &skyInfo;
 
         vkUpdateDescriptorSets(device,
             static_cast<uint32_t>(writes.size()), writes.data(),

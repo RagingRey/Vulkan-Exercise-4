@@ -116,6 +116,17 @@
       <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
       <IgnoreSpecificDefaultLibraries>MSVCRT.lib;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
     </Link>
+    <PreBuildEvent>
+      <Command>if not exist "$(ProjectDir)shaders" mkdir "$(ProjectDir)shaders"
+"%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)SHADERS\shader.vert"  -o "$(ProjectDir)shaders\vert.spv"
+"%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)SHADERS\shader.frag"  -o "$(ProjectDir)shaders\frag.spv"
+"%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)SHADERS\skybox.vert"  -o "$(ProjectDir)shaders\skybox.vert.spv"
+"%VULKAN_SDK%\Bin\glslc.exe" "$(ProjectDir)SHADERS\skybox.frag"  -o "$(ProjectDir)shaders\skybox.frag.spv"</Command>
+    </PreBuildEvent>
+    <PostBuildEvent>
+      <Command>if not exist "$(TargetDir)shaders" mkdir "$(TargetDir)shaders"
+xcopy /y /d "$(ProjectDir)shaders\*.spv" "$(TargetDir)shaders\"</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
@@ -175,6 +186,10 @@
       <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">glslc ".\Shaders\shader.vert" -o ".\Shaders\vert.spv"</Command>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">.\Shaders\vert.spv</Outputs>
     </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="skybox.frag" />
+    <None Include="skybox.vert" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
